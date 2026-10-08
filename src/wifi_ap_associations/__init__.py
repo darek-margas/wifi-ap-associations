@@ -10,13 +10,13 @@ TYPE string. The package has no Home Assistant imports; it is the library behind
 Wi-Fi Association Presence integration, which offers the registered types in its UI.
 """
 
-__version__ = "0.1.0"
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
+
+__version__ = "0.1.0"
 
 
 class AccessPointError(Exception):
