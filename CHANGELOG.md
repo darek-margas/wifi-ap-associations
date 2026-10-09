@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.3
+
+- Collector: new **`mikrotik`** command list for RouterOS (access points, routers, CAPsMAN
+  controllers): identity, resources, routerboard, packages, interfaces, and the client
+  table of each Wi-Fi package (`wireless`, `wifi`, `wifiwave2`, `caps-man`), all with
+  `print terse` where it helps parsing.
+- With this list each command runs as its own SSH exec request instead of being typed
+  into an interactive terminal. RouterOS's terminal sends escape queries, wraps lines at
+  80 columns and echoes commands, which made reports hard to read.
+
 ## 0.4.2
 
 - Collector: extra commands may also be the usual read-only client-list commands of

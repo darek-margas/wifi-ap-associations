@@ -94,6 +94,21 @@ PROFILES: dict[str, list[str]] = {
         " ubus call \"$o\" get_clients; done",
         "iwinfo",
     ],
+    # MikroTik RouterOS (APs, routers, CAPsMAN controllers): system details, interfaces and
+    # the client table of each Wi-Fi package (wireless = RouterOS 6/7 legacy, wifi and
+    # wifiwave2 = RouterOS 7, caps-man = controller). A package that isn't installed just
+    # answers "bad command name". Run over SSH exec, see EXEC_PROFILES.
+    "mikrotik": [
+        "/system identity print",
+        "/system resource print",
+        "/system routerboard print",
+        "/system package print terse",
+        "/interface print terse",
+        "/interface wireless registration-table print terse",
+        "/interface wifi registration-table print terse",
+        "/interface wifiwave2 registration-table print terse",
+        "/caps-man registration-table print terse",
+    ],
     "cisco_wlc": [
         "terminal length 0",
         "show version | include Cisco IOS|uptime|Model",
@@ -197,6 +212,11 @@ _IPV6 = re.compile(
 _SERIAL_CISCO = re.compile(r"\b[A-Z]{3}\d{4}[A-Z0-9]{4}\b")
 _PROMPT = re.compile(r"(\S{0,40}[>#$%:]|->)\s*$")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+# Profiles whose devices answer better to one SSH exec request per command than to an
+# interactive terminal. RouterOS's terminal sends escape queries, wraps lines at 80
+# columns, echoes commands and pads lines; an exec request returns just the output.
+EXEC_PROFILES = frozenset({"mikrotik"})
 
 LEGACY = {
     "kex_algs": [
@@ -346,6 +366,21 @@ async def collect_ssh(args: argparse.Namespace, password: str) -> str:
         args.host, port=args.port, username=args.username, password=password, **options
     ) as conn:
         transcript.append(f"# server version: {conn.get_extra_info('server_version')}")
+        if args.profile in EXEC_PROFILES:
+            transcript.append("# mode: one SSH exec per command (no interactive terminal)")
+            for command in commands:
+                if not is_read_only_command(command):
+                    transcript.append(f"# --- {command!r} REFUSED (not read-only) ---")
+                    continue
+                transcript.append(f"# --- {command} ---")
+                try:
+                    result = await asyncio.wait_for(conn.run(command, check=False), 30)
+                except asyncio.TimeoutError:
+                    transcript.append("# (no answer within 30 s)")
+                    continue
+                output = f"{result.stdout or ''}{result.stderr or ''}"
+                transcript.append(_pretty_json(_ANSI.sub("", output).replace("\r", "")))
+            return "\n".join(transcript)
         async with conn.create_process(
             term_type="vt100", term_size=(200, 1000), encoding="utf-8", errors="replace"
         ) as process:

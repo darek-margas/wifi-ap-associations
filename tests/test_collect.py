@@ -252,3 +252,42 @@ def test_installed_pysnmp_engine_can_be_closed() -> None:
     from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
 
     assert callable(getattr(SnmpEngine, "close_dispatcher", None))
+
+
+def test_mikrotik_profile_runs_each_command_as_ssh_exec(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+
+    calls: list[str] = []
+
+    class Result:
+        def __init__(self, stdout: str) -> None:
+            self.stdout, self.stderr = stdout, ""
+
+    class Conn:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get_extra_info(self, key):
+            return "SSH-2.0-ROSSSH"
+
+        async def run(self, command, check=False):
+            calls.append(command)
+            return Result(f"output of {command}\r\n")
+
+        def create_process(self, *args, **kwargs):
+            raise AssertionError("MikroTik must not use an interactive terminal")
+
+    monkeypatch.setattr(asyncssh, "connect", lambda *args, **kwargs: Conn())
+    args = argparse.Namespace(
+        host="192.0.2.10", port=22, username="admin", profile="mikrotik",
+        command=["/interface wireless registration-table print", "/system reboot"],
+        legacy_ssh=False,
+    )
+    transcript = asyncio.run(collect.collect_ssh(args, "pw"))
+
+    assert calls == [*PROFILES["mikrotik"], "/interface wireless registration-table print"]
+    assert "'/system reboot' REFUSED" in transcript
+    assert "output of /system identity print" in transcript and "\r" not in transcript

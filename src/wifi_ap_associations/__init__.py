@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 
 class AccessPointError(Exception):
