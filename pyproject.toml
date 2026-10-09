@@ -27,6 +27,10 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+wifi-ap-collect = "wifi_ap_associations.collect:main"
+wifi-ap-probe = "wifi_ap_associations.probe:main"
+
 [project.urls]
 Homepage = "https://github.com/darek-margas/wifi-ap-associations"
 Issues = "https://github.com/darek-margas/wifi-ap-associations/issues"

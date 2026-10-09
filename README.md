@@ -80,6 +80,31 @@ second argument, which implements `UnifiSource`
 and client records). In Home Assistant that is the UniFi Network integration's
 connection; elsewhere, wrap your own controller client.
 
+## Command-line tools
+
+Installed with the library:
+
+```bash
+# Read an access point that has a driver, print its associated clients
+wifi-ap-probe --type openwrt_ssh --host 192.168.1.2 --username root
+wifi-ap-probe --list-types
+
+# Collect read-only, redacted data from an access point that has no driver yet
+wifi-ap-collect --host 192.168.1.2 --username admin
+wifi-ap-collect --host 192.168.1.2 --snmp            # needs: pip install pysnmp
+wifi-ap-collect --list-profiles
+```
+
+Passwords are asked for interactively (or taken from `$AP_PASSWORD`). `wifi-ap-collect`
+runs only commands that display information (anything that could change settings is
+refused), redacts MAC addresses (vendor prefix kept), IP and email addresses, the
+secrets you typed and secret-looking settings, and writes `ap-report-<host>.txt`.
+**Read the report before sharing it**: automatic redaction can't recognise everything.
+Attach it to a
+[New access point model](https://github.com/darek-margas/wifi-association-presence/issues/new?template=new_access_point.yml)
+issue. `wifi-ap-collect --help` lists all options (profiles, extra commands, legacy SSH,
+SNMPv3).
+
 ## Security
 
 The SSH drivers log in with a password and **do not verify the access point's host key**
