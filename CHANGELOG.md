@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- OpenWrt: failed or malformed client-table reads now raise an AP error instead of reporting an empty client list. Missing ubus is detected even with section markers.
+- Collector: validate custom SSH commands as display commands; refuse shell chaining, redirection, expansion and unknown command families. Existing built-in profiles are retained.
+- SNMP collector: close the engine dispatcher after success, failure or cancellation.
+
 ## 0.4.0
 
 - **SNMP comes with the library**: pysnmp (7.1 or newer, below 8) is now a dependency, so
@@ -50,3 +56,4 @@ only the package name differs (`wifi_ap_associations` instead of `ap_drivers`).
 - `PollResult` with the associated clients (MAC, SSID, band, signal, connected time) and
   the access point's own details (name, location, model, firmware, hardware, uptime,
   CPU, memory).
+

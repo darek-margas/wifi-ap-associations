@@ -97,14 +97,16 @@ wifi-ap-collect --list-profiles
 ```
 
 Passwords are asked for interactively (or taken from `$AP_PASSWORD`). `wifi-ap-collect`
-runs only commands that display information (anything that could change settings is
-refused), redacts MAC addresses (vendor prefix kept), IP and email addresses, the
+uses vetted profile commands and validates extra display commands (shell chaining,
+redirection, expansion and unsupported command families are refused), redacts MAC addresses (vendor prefix kept), IP and email addresses, the
 secrets you typed and secret-looking settings, and writes `ap-report-<host>.txt`.
 **Read the report before sharing it**: automatic redaction can't recognise everything.
 Attach it to a
 [New access point model](https://github.com/darek-margas/wifi-association-presence/issues/new?template=new_access_point.yml)
 issue. `wifi-ap-collect --help` lists all options (profiles, extra commands, legacy SSH,
-SNMPv3).
+SNMPv3). Custom commands support `show`, `get`, `display`, known information commands
+and read-only `ubus` calls; unsupported commands are skipped. Use a read-only account
+where the access point provides one.
 
 From a program, the SSH collector is one call (same commands, read-only filter and
 redaction):
@@ -145,3 +147,4 @@ Run workflow); a manual run only uploads to TestPyPI.
 ## License
 
 GPL-3.0, like the integration.
+

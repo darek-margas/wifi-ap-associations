@@ -188,16 +188,24 @@ def parse_info(board: dict[str, Any] | None, info: dict[str, Any] | None) -> Acc
 def parse_poll(output: str) -> PollResult:
     """Clients of every radio, and what the AP reports about itself.
 
-    Unparsable sections are skipped (a radio being reconfigured, a truncated reply);
-    clients of a radio whose status can't be read are kept without an SSID.
+    Broken device details or status are optional, but a failed client-table read
+    is an AP failure, not evidence that its clients left.
     """
     board = info = None
     ssids: dict[str, str | None] = {}
     clients: list[AssociatedClient] = []
+    valid_system = False
+    valid_clients = False
     for kind, obj, body in split_sections(output):
         data = _json(body)
+        if kind == "clients" and (
+            data is None or not isinstance(data.get("clients"), dict)
+        ):
+            raise AccessPointError(f"Could not read client table for {obj}")
         if data is None:
             continue
+        if kind in ("board", "info"):
+            valid_system = True
         if kind == "board":
             board = data
         elif kind == "info":
@@ -205,7 +213,10 @@ def parse_poll(output: str) -> PollResult:
         elif kind == "status" and obj:
             ssids[obj] = _text(data.get("ssid"))
         elif kind == "clients" and obj:
+            valid_clients = True
             clients.extend(parse_clients(data, ssids.get(obj)))
+    if not valid_system and not valid_clients:
+        raise AccessPointError("No valid ubus response from the access point")
     return PollResult(clients, parse_info(board, info))
 
 
@@ -236,7 +247,7 @@ class OpenWrtSsh(AccessPointDriver):
     async def async_poll(self) -> PollResult:
         """Clients and device details, from one SSH command."""
         output = await self._run(POLL_COMMAND)
-        if "ubus" in output and "not found" in output and MARK not in output:
+        if "ubus" in output and "not found" in output:
             raise AccessPointError(f"{self.config['host']}: ubus is not available")
         return parse_poll(output)
 
@@ -258,3 +269,4 @@ class OpenWrtSsh(AccessPointDriver):
         except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
             raise AccessPointError(f"{self.config['host']}: {err!r}") from err
         return f"{result.stdout or ''}\n{result.stderr or ''}"
+

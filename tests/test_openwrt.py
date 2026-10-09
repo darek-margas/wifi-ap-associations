@@ -112,13 +112,12 @@ def test_device_details() -> None:
     assert info.cpu_percent is None
 
 
-def test_broken_sections_are_skipped() -> None:
+def test_optional_broken_sections_are_skipped() -> None:
     result = parse_poll(
         output(
             ("board", "Command failed: Not found"),
             ("status hostapd.phy0-ap0", "{ truncated"),
             ("clients hostapd.phy0-ap0", CLIENTS_24),
-            ("clients hostapd.phy1-ap0", "[1, 2]"),
         )
     )
     # Clients survive a broken status (no SSID); broken board/info leave the details empty.
@@ -207,3 +206,31 @@ def test_every_driver_reports_only_real_info_fields() -> None:
     assert "location" not in DRIVERS["openwrt_ssh"].REPORTS
     assert "cpu_percent" not in DRIVERS["openwrt_ssh"].REPORTS
     assert "location" in DRIVERS["dlink_dap_ssh"].REPORTS
+
+
+
+@pytest.mark.parametrize("body", ["Command failed: Not found", "{ truncated", "[1, 2]", {}, {"clients": None}])
+def test_broken_client_table_is_an_ap_error(body: object) -> None:
+    # Even if another radio read succeeds, missing clients must not become departures.
+    with pytest.raises(AccessPointError, match="client table"):
+        parse_poll(output(("clients hostapd.phy0-ap0", CLIENTS_24), ("clients hostapd.phy1-ap0", body)))
+
+
+def test_valid_empty_client_table_is_not_an_error() -> None:
+    assert parse_poll(output(("clients hostapd.wlan0", {"clients": {}}))).clients == []
+
+
+def test_missing_ubus_with_section_markers_is_an_error() -> None:
+    driver = OpenWrtSsh({"host": "192.0.2.1", "username": "root", "password": "x"})
+
+    async def fake_run(command: str) -> str:
+        return output(("board", "ash: ubus: not found"), ("info", "ash: ubus: not found"))
+
+    driver._run = fake_run
+    with pytest.raises(AccessPointError):
+        asyncio.run(driver.async_poll())
+
+
+def test_unrecognised_output_is_an_error() -> None:
+    with pytest.raises(AccessPointError):
+        parse_poll("permission denied")

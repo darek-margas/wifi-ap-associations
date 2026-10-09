@@ -8,7 +8,7 @@ import asyncssh
 import pytest
 
 from wifi_ap_associations import AccessPointAuthError, AccessPointError, collect
-from wifi_ap_associations.collect import PROFILES, Redactor, _REFUSED, redact
+from wifi_ap_associations.collect import PROFILES, Redactor, is_read_only_command, redact
 
 
 @pytest.mark.parametrize(
@@ -16,18 +16,18 @@ from wifi_ap_associations.collect import PROFILES, Redactor, _REFUSED, redact
     ["reboot", "set ssid x", "factory reset", "save", "Apply", "  delete 1", "passwd", "ping 1.1.1.1"],
 )
 def test_changing_commands_are_refused(command: str) -> None:
-    assert _REFUSED.match(command)
+    assert not is_read_only_command(command)
 
 
 @pytest.mark.parametrize("command", ["show version", "get clientinfo", "ubus call system board", "mca-dump"])
 def test_reading_commands_are_allowed(command: str) -> None:
-    assert not _REFUSED.match(command)
+    assert is_read_only_command(command)
 
 
 def test_profiles_contain_no_refused_command() -> None:
     for name, commands in PROFILES.items():
         for command in commands:
-            assert not _REFUSED.match(command), f"{name}: {command}"
+            assert is_read_only_command(command), f"{name}: {command}"
 
 
 def test_mac_keeps_vendor_prefix_and_is_consistent() -> None:
@@ -189,3 +189,40 @@ def test_snmp_protocol_names_exist_in_installed_pysnmp() -> None:
         assert hasattr(hlapi, name), name
     for name in ("CommunityData", "UsmUserData", "UdpTransportTarget", "bulk_walk_cmd", "get_cmd"):
         assert hasattr(hlapi, name), name
+
+
+
+@pytest.mark.parametrize("command", [
+    "uci set wireless.radio0.disabled=1", "show version; reboot", "show version && reboot",
+    "show $(reboot)", "show `reboot`", "show version > /tmp/output", "get clientinfo\nreboot",
+    "ubus call system reboot", "ubus call hostapd.wlan0 del_client", "sh -c reboot",
+])
+def test_custom_commands_cannot_change_settings_or_run_shell_code(command: str) -> None:
+    assert not is_read_only_command(command)
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+def test_snmp_engine_is_closed_on_every_exit(monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
+    from unittest.mock import Mock
+
+    engine = Mock()
+
+    async def session(args, secrets):
+        return engine, None, None, None
+
+    async def tables(*args):
+        if outcome == "error":
+            raise RuntimeError("read failed")
+        if outcome == "cancel":
+            raise asyncio.CancelledError
+        return ["report"]
+
+    monkeypatch.setattr(collect, "_snmp_session", session)
+    monkeypatch.setattr(collect, "_collect_snmp_tables", tables)
+    if outcome == "success":
+        assert asyncio.run(collect.collect_snmp(None, {})) == ["report"]
+    else:
+        expected = RuntimeError if outcome == "error" else asyncio.CancelledError
+        with pytest.raises(expected):
+            asyncio.run(collect.collect_snmp(None, {}))
+    engine.close_dispatcher.assert_called_once_with()

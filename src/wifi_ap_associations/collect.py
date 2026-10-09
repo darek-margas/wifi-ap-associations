@@ -127,6 +127,30 @@ _REFUSED = re.compile(
     r"ssl\s+freset|ping|traceroute)\b",
     re.IGNORECASE,
 )
+def is_read_only_command(command: str) -> bool:
+    """Accept vetted profile commands or a restricted custom display command.
+
+    Complex shell syntax is allowed only in exact, maintained profile entries.
+    Custom commands cannot chain commands, redirect output or expand shell code.
+    """
+    command = command.strip()
+    if any(command in commands for commands in PROFILES.values()):
+        return True
+    if not re.fullmatch(r"[A-Za-z0-9_./:*?= -]+", command):
+        return False
+    words = command.split()
+    if not words:
+        return False
+    if words[0] in {"show", "get", "display"}:
+        return True
+    if len(words) == 1 and words[0] in {"help", "?", "version", "info", "iwinfo", "mca-dump"}:
+        return True
+    return len(words) == 4 and words[:2] == ["ubus", "call"] and (
+        (words[2] == "system" and words[3] in {"board", "info"})
+        or (words[2].startswith("hostapd.") and words[3] in {"get_status", "get_clients"})
+    )
+
+
 # Lines that may carry secrets: keys, passphrases, RADIUS secrets, community strings.
 _SECRET_LINE = re.compile(
     r"(pass(word|phrase)?|secret|psk|key|community|token|credential|serial)", re.IGNORECASE
@@ -307,7 +331,7 @@ async def collect_ssh(args: argparse.Namespace, password: str) -> str:
             transcript.append("# --- login banner / prompt ---")
             transcript.append(await read_until_prompt(process, 10))
             for command in commands:
-                if _REFUSED.match(command):
+                if not is_read_only_command(command):
                     transcript.append(f"# --- {command!r} REFUSED (not read-only) ---")
                     continue
                 transcript.append(f"# --- {command} ---")
@@ -546,10 +570,18 @@ async def _snmp_session(args: argparse.Namespace, secrets: dict[str, str]):
 
 
 async def collect_snmp(args: argparse.Namespace, secrets: dict[str, str]) -> list[str]:
-    """Walk the system group, the vendor subtree and the standard tables."""
+    """Walk the tables and always release the engine's transports and timer."""
+    engine, auth, target, context = await _snmp_session(args, secrets)
+    try:
+        return await _collect_snmp_tables(args, secrets, engine, auth, target, context)
+    finally:
+        engine.close_dispatcher()
+
+
+async def _collect_snmp_tables(args, secrets, engine, auth, target, context) -> list[str]:
+    """Read and redact tables while the caller owns the SNMP engine."""
     from pysnmp.hlapi.v3arch.asyncio import ObjectIdentity, ObjectType, bulk_walk_cmd, get_cmd
 
-    engine, auth, target, context = await _snmp_session(args, secrets)
     redactor = Redactor(list(secrets.values()))
     report = [f"# mode: SNMP {'v3 user' if args.snmp_user else 'v2c'}"]
 
@@ -824,3 +856,4 @@ REVIEW_WARNING = """\
 
 if __name__ == "__main__":
     sys.exit(main())
+
