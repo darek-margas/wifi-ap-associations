@@ -204,3 +204,29 @@ def test_rejected_login(monkeypatch: pytest.MonkeyPatch) -> None:
     driver = MikroTikSsh({"host": "192.0.2.1", "port": 22, "username": "admin", "password": "x"})
     with pytest.raises(AccessPointAuthError):
         asyncio.run(driver.async_poll())
+
+
+def test_wifi_client_still_authenticating_is_skipped() -> None:
+    table = (
+        " 0 A interface=wifi1 ssid=Home mac-address=5C:AD:BA:00:00:01 uptime=5m signal=-50 band=5ghz-ax\n"
+        " 1 G interface=wifi1 ssid=Home mac-address=5C:AD:BA:00:00:02 uptime=1s signal=-60 band=5ghz-ax\n"
+    )
+    result = parse_poll(outputs(wifi_interfaces=WIFI_INTERFACES, wifi_clients=table))
+    assert [client.mac for client in result.clients] == ["5C:AD:BA:00:00:01"]
+
+
+def test_wireless_flag_a_means_ap_not_authorized_so_it_is_not_filtered() -> None:
+    table = " 0 W interface=wlan1 mac-address=5C:AD:BA:00:00:03 uptime=1h signal-strength=-61@HT20-7\n"
+    result = parse_poll(
+        outputs(
+            wifi_interfaces="bad command name wifi (line 1 column 12)\n",
+            wifi_clients="bad command name wifi (line 1 column 12)\n",
+            wireless_interfaces=WIRELESS_INTERFACES,
+            wireless_clients=table,
+        )
+    )
+    assert [client.mac for client in result.clients] == ["5C:AD:BA:00:00:03"]
+
+
+def test_six_ghz_band() -> None:
+    assert band_name("6ghz-be") == "6GHz"

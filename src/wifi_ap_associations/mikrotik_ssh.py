@@ -20,8 +20,8 @@ System details, as RouterOS 7.20 prints them (confirmed on a CRS310):
 Clients come from the registration table of the Wi-Fi package the device has:
 `/interface wifi` (RouterOS 7, also called wifiwave2) or `/interface wireless`
 (RouterOS 6 and older 7 devices). `print terse` gives one client per line as
-`key=value` pairs, e.g. (column names from MikroTik's documentation, not yet confirmed
-on a real access point, hence EXPERIMENTAL):
+`key=value` pairs, e.g. (column names as MikroTik's WiFi manual lists them, not yet confirmed on a
+real access point, hence EXPERIMENTAL):
 
     0 interface=wifi1 ssid=Home mac-address=5C:AD:BA:00:00:01 uptime=1h2m3s
       signal=-55 band=5ghz-ax ...
@@ -123,13 +123,17 @@ def parse_print(output: str) -> dict[str, str]:
 
 
 def parse_terse(output: str) -> list[dict[str, str]]:
-    """One dict per `print terse` record (leading row number and flags dropped)."""
+    """One dict per `print terse` record.
+
+    The leading row number is dropped; the flag letters before the first key (e.g. "RS",
+    or "A" for an authorized client) are kept under the key "_flags".
+    """
     records = []
     for line in output.splitlines():
         keys = list(_TERSE_KEY.finditer(line))
         if not keys:
             continue
-        record = {}
+        record = {"_flags": "".join(ch for ch in line[: keys[0].start()] if ch.isalpha())}
         for match, following in zip(keys, [*keys[1:], None]):
             end = following.start() if following else len(line)
             record[match.group(1)] = line[match.end() : end].strip()
@@ -202,11 +206,23 @@ def parse_interfaces(records: list[dict[str, str]]) -> dict[str, tuple[str | Non
 
 
 def parse_clients(
-    records: list[dict[str, str]], interfaces: dict[str, tuple[str | None, str | None]]
+    records: list[dict[str, str]],
+    interfaces: dict[str, tuple[str | None, str | None]],
+    *,
+    authorized_only: bool = False,
 ) -> list[AssociatedClient]:
-    """Registration table records as associated clients (records without a MAC skipped)."""
+    """Registration table records as associated clients (records without a MAC skipped).
+
+    In the `wifi` package's table the flag A means authorized; a client still
+    authenticating has flags but no A and is skipped (as OpenWrt's driver skips stations
+    that aren't authorized yet). Records printed without any flags are kept. In the
+    `wireless` package A means "the peer is an AP", so it isn't used there.
+    """
     clients = []
     for record in records:
+        flags = record.get("_flags", "")
+        if authorized_only and flags and "A" not in flags:
+            continue
         try:
             mac = normalize_mac(record.get("mac-address", ""))
         except ValueError:
@@ -246,7 +262,7 @@ def parse_poll(outputs: dict[str, str]) -> PollResult:
         if table.strip() and not records:
             raise AccessPointError(f"Could not read the {package} registration table")
         interfaces = parse_interfaces(parse_terse(outputs.get(f"{package}_interfaces", "")))
-        clients = parse_clients(records, interfaces)
+        clients = parse_clients(records, interfaces, authorized_only=package == "wifi")
         break
     return PollResult(clients, parse_info(identity, resource))
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1
+
+- MikroTik (`wifi` package): a client that is still authenticating (no `A` flag in the
+  registration table) isn't counted as associated, as OpenWrt's driver does. In the old
+  `wireless` package `A` means "the peer is an AP", so nothing is filtered there.
+- The client-table column names were checked against MikroTik's WiFi manual
+  (`interface`, `mac-address`, `ssid`, `uptime`, `signal`, `band`; on the interface
+  `configuration.ssid`, `channel.band`, including 6 GHz bands such as `6ghz-be`). Still
+  experimental until confirmed on a real access point.
+
 ## 0.5.0
 
 - **New driver `mikrotik_ssh` (experimental): MikroTik RouterOS** access points, routers
