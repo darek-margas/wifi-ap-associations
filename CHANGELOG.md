@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0
+
+- **New driver `mikrotik_ssh` (experimental): MikroTik RouterOS** access points, routers
+  with Wi-Fi and CAPsMAN controllers, over SSH. One connection per poll, each command as
+  its own exec request (no terminal). Reads name, model, firmware, uptime, CPU and memory
+  from `/system identity` and `/system resource` (confirmed on RouterOS 7.20), and the
+  clients from the `wifi` package's registration table (RouterOS 7) or the `wireless`
+  one (RouterOS 6), with SSID and band from the interface list.
+- **Experimental** because the registration-table columns come from MikroTik's
+  documentation, not yet from a real access point. A report from one (Collect access
+  point report → MikroTik RouterOS) will confirm or correct it.
+
 ## 0.4.4
 
 - Collector reports end with a timing line: `# finished: 11 commands in 0.8 s` (SSH) or

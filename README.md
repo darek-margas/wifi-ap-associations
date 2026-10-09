@@ -20,6 +20,7 @@ inventory, an exporter for Prometheus, your own scripts.
 |---|---|---|---|
 | `dlink_dap_ssh` | D-Link DAP (e.g. DAP-2610) | SSH console | `%` |
 | `openwrt_ssh` | OpenWrt 22.03 and newer | SSH, `ubus` (hostapd) | `dBm` |
+| `mikrotik_ssh` | MikroTik RouterOS (APs, routers with Wi-Fi, CAPsMAN), **experimental** | SSH exec, `print terse` of the `wifi` or `wireless` registration table | `dBm` |
 | `unifi_network` | UniFi | through a UniFi Network controller connection you pass in (see below) | `dBm` |
 
 More can be added as drivers; see
