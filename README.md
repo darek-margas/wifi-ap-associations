@@ -120,9 +120,12 @@ ruff check --select E9,F src tests
 python -m pytest
 ```
 
-Releases: set `__version__` in `src/wifi_ap_associations/__init__.py`, add a section to
-`CHANGELOG.md`, run the *publish* workflow by hand to upload to TestPyPI and check it,
-then push a tag `v<version>` to upload to PyPI and create the GitHub release.
+Releases: set `__version__` in `src/wifi_ap_associations/__init__.py`, add a
+`## <version>` section to `CHANGELOG.md`, and push to `main`. The *publish* workflow sees
+a version without a tag, runs the tests, uploads to PyPI, and creates the tag
+`v<version>` and the GitHub release. To try a version on TestPyPI without releasing it,
+push it to another branch and run *publish* by hand on that branch (Actions → publish →
+Run workflow); a manual run only uploads to TestPyPI.
 
 ## License
 

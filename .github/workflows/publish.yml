@@ -1,38 +1,68 @@
 name: publish
 
-# Run it by hand (Actions -> publish -> Run workflow) to upload to TestPyPI.
-# Push a tag v<version> (matching __version__ in src/wifi_ap_associations/__init__.py)
-# to upload to PyPI and create the GitHub release.
-# Uploads use PyPI Trusted Publishing: no token is stored anywhere.
+# Releasing is a push: set __version__ in src/wifi_ap_associations/__init__.py, add a
+# "## <version>" section to CHANGELOG.md, and push to main. If that version has no tag
+# yet, this workflow runs the tests, builds, uploads to PyPI, then creates the tag
+# v<version> and a GitHub release with that changelog section. Pushes that don't change
+# the version only run the tests.
+#
+# Run it by hand (Actions -> publish -> Run workflow) to upload the current version to
+# TestPyPI first, if you want to check it there. A version can be uploaded only once,
+# to each index.
+#
+# Uploads use PyPI Trusted Publishing (this file name and the environments "pypi" /
+# "testpypi" are registered on PyPI): no token is stored anywhere.
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      new: ${{ steps.v.outputs.new }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/wifi_ap_associations/__init__.py)
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "new=false" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is already released"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is new"
+          fi
+
   tests:
+    needs: version
+    if: needs.version.outputs.new == 'true' || github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/tests.yml
 
   build:
-    needs: tests
+    needs: [version, tests]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Tag matches the package version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          VERSION=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/wifi_ap_associations/__init__.py)
-          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match __version__ $VERSION"
-            exit 1
-          fi
+      - name: CHANGELOG has a section for this version
+        run: grep -q "^## ${{ needs.version.outputs.version }}\b" CHANGELOG.md
       - name: Build
         run: |
           pip install build twine
@@ -62,8 +92,8 @@ jobs:
           repository-url: https://test.pypi.org/legacy/
 
   pypi:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    if: github.event_name == 'push' && needs.version.outputs.new == 'true'
+    needs: [version, build]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -78,8 +108,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: pypi
+    needs: [version, pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -89,10 +118,11 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: GitHub release
+      - name: Tag and GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           awk -v v="$VERSION" '/^## / { if (found) exit; if ($2 == v) { found = 1; next } } found { print }' CHANGELOG.md > notes.md
-          gh release create "$GITHUB_REF_NAME" dist/* --title "wifi-ap-associations $GITHUB_REF_NAME" --notes-file notes.md
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" \
+            --title "wifi-ap-associations v$VERSION" --notes-file notes.md
