@@ -31,7 +31,8 @@ More can be added as drivers; see
 pip install wifi-ap-associations
 ```
 
-Python 3.12 or newer. The SSH drivers use [asyncssh](https://pypi.org/project/asyncssh/).
+Python 3.12 or newer. It brings [asyncssh](https://pypi.org/project/asyncssh/) (SSH) and
+[pysnmp](https://pypi.org/project/pysnmp/) (SNMP collector).
 
 ## Use
 
@@ -91,7 +92,7 @@ wifi-ap-probe --list-types
 
 # Collect read-only, redacted data from an access point that has no driver yet
 wifi-ap-collect --host 192.168.1.2 --username admin
-wifi-ap-collect --host 192.168.1.2 --snmp            # needs: pip install pysnmp
+wifi-ap-collect --host 192.168.1.2 --snmp            # SNMP v2c, asks for the community
 wifi-ap-collect --list-profiles
 ```
 

@@ -11,7 +11,7 @@ license = "GPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "Darek Margas" }]
 requires-python = ">=3.12"
-dependencies = ["asyncssh>=2.14.2"]
+dependencies = ["asyncssh>=2.14.2", "pysnmp>=7.1,<8"]
 keywords = ["wifi", "access point", "presence", "openwrt", "d-link", "unifi", "home assistant"]
 classifiers = [
     "Development Status :: 4 - Beta",

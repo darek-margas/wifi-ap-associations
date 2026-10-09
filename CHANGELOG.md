@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- **SNMP comes with the library**: pysnmp (7.1 or newer, below 8) is now a dependency, so
+  `wifi-ap-collect --snmp` works without installing anything else.
+- **`collect.async_collect_snmp_report()`**: the SNMP collector as a function (v2c with a
+  community, v3 with user, keys and algorithms), with the same walk and redaction as
+  `wifi-ap-collect --snmp`, and a limit per walked subtree (default 5000 values).
+  Rejected v3 keys raise `AccessPointAuthError`, anything else `AccessPointError`.
+- A test checks that every SNMPv3 algorithm the collector offers exists in the installed
+  pysnmp.
+
 ## 0.3.0
 
 - **`collect.async_collect_ssh_report()`**: the SSH collector as a function, for programs

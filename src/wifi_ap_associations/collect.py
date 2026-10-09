@@ -38,7 +38,7 @@ Options:
 Installed with the library (pip install wifi-ap-associations) as the command
 "wifi-ap-collect", or run it as "python -m wifi_ap_associations.collect".
 SSH mode works out of the box (asyncssh comes with the library).
-SNMP mode also needs: pip install pysnmp
+SNMP mode works out of the box too (pysnmp comes with the library).
 Secrets are asked for interactively, or taken from $AP_PASSWORD (SSH password, SNMPv3
 auth key), $AP_PRIV_KEY (SNMPv3 privacy key, defaults to the auth key) and
 $AP_COMMUNITY (SNMP v2c community).
@@ -664,6 +664,67 @@ def _elide(value: str) -> str:
     if value.startswith("HEX: "):
         return f"HEX({len(value[len('HEX: '):].split())} bytes)"
     return value
+
+
+# Error texts of pysnmp / SNMP agents that mean the v3 user or keys were not accepted.
+_SNMP_AUTH_ERRORS = ("digest", "unknown user", "unknownusername", "authorization", "decryption")
+
+
+async def async_collect_snmp_report(
+    host: str,
+    *,
+    port: int = 161,
+    community: str | None = None,
+    user: str | None = None,
+    auth_key: str = "",
+    priv_key: str = "",
+    auth_protocol: str = "sha",
+    priv_protocol: str = "aes",
+    max_values: int = 5000,
+) -> str:
+    """Collect over SNMP and return the redacted report, review warning on top.
+
+    For programs such as the Home Assistant integration: the same walk and redaction as
+    `wifi-ap-collect --snmp`, values outside the likely client tables shown only as
+    their length. SNMP v2c with `community`, or v3 with `user`, `auth_key` and
+    `priv_key` (empty: same as the auth key) and the protocol names of SNMP_AUTH /
+    SNMP_PRIV. `max_values` limits each walked subtree. Raises ValueError for missing
+    or unknown settings, AccessPointAuthError when the v3 user or keys are rejected
+    and AccessPointError for any other failure (v2c with a wrong community gets no
+    answer at all, so it shows as no response).
+    """
+    if user:
+        if auth_protocol not in SNMP_AUTH or priv_protocol not in SNMP_PRIV:
+            raise ValueError(f"unknown SNMPv3 protocol {auth_protocol!r} / {priv_protocol!r}")
+        if not auth_key:
+            raise ValueError("SNMPv3 needs an auth key")
+        secrets = {"auth": auth_key, "priv": priv_key or auth_key}
+    elif community:
+        secrets = {"community": community}
+    else:
+        raise ValueError("an SNMP community (v2c) or user (v3) is required")
+    args = argparse.Namespace(
+        host=host,
+        port=port,
+        snmp_user=user or None,
+        snmp_auth=auth_protocol,
+        snmp_priv=priv_protocol,
+        snmp_root=[],
+        snmp_max=max_values,
+        snmp_full_values=False,
+        no_redact=False,
+    )
+    try:
+        lines = await collect_snmp(args, secrets)
+    except Exception as err:  # pysnmp raises plain errors; classify by their text
+        text = str(err).lower()
+        if user and any(marker in text for marker in _SNMP_AUTH_ERRORS):
+            raise AccessPointAuthError("SNMPv3 user or keys rejected") from err
+        raise AccessPointError(
+            f"SNMP failed: {err}; check the address, the community or user, and that SNMP "
+            "is enabled on the access point"
+        ) from err
+    return REVIEW_WARNING + "\n".join(lines) + "\n"
 
 
 def run_snmp(args: argparse.Namespace) -> str | None:
