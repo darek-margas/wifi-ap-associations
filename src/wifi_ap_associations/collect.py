@@ -104,6 +104,10 @@ PROFILES: dict[str, list[str]] = {
         "/system routerboard print",
         "/system package print terse",
         "/interface print terse",
+        # The Wi-Fi interfaces with SSID and band: the client tables only name the
+        # interface a client is on.
+        "/interface wifi print terse",
+        "/interface wireless print terse",
         "/interface wireless registration-table print terse",
         "/interface wifi registration-table print terse",
         "/interface wifiwave2 registration-table print terse",
@@ -348,6 +352,22 @@ def _pretty_json(output: str) -> str:
 
 
 async def collect_ssh(args: argparse.Namespace, password: str) -> str:
+    """Log in, run the commands, return the raw transcript ending with a timing line.
+
+    The timing line ("# finished: 9 commands in 0.8 s") shows a fast collection really
+    ran: over SSH exec a whole command list can take under a second.
+    """
+    started = time.monotonic()
+    transcript = await _collect_ssh_transcript(args, password)
+    ran = sum(
+        1
+        for line in transcript.splitlines()
+        if line.startswith("# --- ") and "REFUSED" not in line and "login banner" not in line
+    )
+    return f"{transcript}\n# finished: {ran} commands in {time.monotonic() - started:.1f} s"
+
+
+async def _collect_ssh_transcript(args: argparse.Namespace, password: str) -> str:
     """Log in, run the commands, return the raw transcript."""
     import asyncssh
 
@@ -476,6 +496,10 @@ STANDARD_ROOTS = {
     "IEEE 802.11 MIB": "1.2.840.10036",
     "BRIDGE-MIB forwarding table (dot1dTpFdbTable)": "1.3.6.1.2.1.17.4.3",
     "IF-MIB interface names (ifDescr)": "1.3.6.1.2.1.2.2.1.2",
+    # CPU and memory for the access point's health sensors, on most SNMP devices.
+    # hrStorageType (an OID) tells RAM from disks even with descriptions elided.
+    "HOST-RESOURCES processor load (hrProcessorLoad)": "1.3.6.1.2.1.25.3.3.1.2",
+    "HOST-RESOURCES storage (hrStorageTable: type, size, used)": "1.3.6.1.2.1.25.2.3.1",
 }
 ENTERPRISE_PREFIX = "1.3.6.1.4.1."
 # Client and AP tables some vendors keep outside their own enterprise subtree, walked
@@ -802,6 +826,7 @@ async def async_collect_snmp_report(
         snmp_full_values=False,
         no_redact=False,
     )
+    started = time.monotonic()
     try:
         lines = await collect_snmp(args, secrets)
     except Exception as err:  # pysnmp raises plain errors; classify by their text
@@ -812,6 +837,7 @@ async def async_collect_snmp_report(
             f"SNMP failed: {err}; check the address, the community or user, and that SNMP "
             "is enabled on the access point"
         ) from err
+    lines = [*lines, f"# finished in {time.monotonic() - started:.1f} s"]
     return REVIEW_WARNING + "\n".join(lines) + "\n"
 
 
@@ -834,7 +860,9 @@ def run_snmp(args: argparse.Namespace) -> str | None:
             or getpass.getpass("SNMP community (read-only): ")
         }
     try:
-        return "\n".join(asyncio.run(collect_snmp(args, secrets)))
+        started = time.monotonic()
+        lines = asyncio.run(collect_snmp(args, secrets))
+        return "\n".join([*lines, f"# finished in {time.monotonic() - started:.1f} s"])
     except Exception as err:  # report plainly, never a traceback dump
         print(f"SNMP collection failed: {err!r}", file=sys.stderr)
         print("Check host, community/user, and that SNMP is enabled on the AP.", file=sys.stderr)

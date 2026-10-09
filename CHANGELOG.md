@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.4
+
+- Collector reports end with a timing line: `# finished: 11 commands in 0.8 s` (SSH) or
+  `# finished in 12.3 s` (SNMP). Over SSH exec a whole command list can take under a
+  second, which looked as if nothing ran.
+- `mikrotik` command list: also `/interface wifi print terse` and `/interface wireless
+  print terse`, the Wi-Fi interfaces with SSID and band (the client tables only name
+  the interface).
+- SNMP walk: also the HOST-RESOURCES processor load and storage tables, where most
+  devices (MikroTik included) report CPU and memory.
+
 ## 0.4.3
 
 - Collector: new **`mikrotik`** command list for RouterOS (access points, routers, CAPsMAN

@@ -131,7 +131,7 @@ def test_snmp_v2c_report(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(collect, "collect_snmp", fake_collect)
     report = _snmp(community="public", max_values=100)
     assert report.startswith(collect.REVIEW_WARNING)
-    assert report.endswith("# mode: SNMP v2c\nsysName = ap\n")
+    assert "# mode: SNMP v2c\nsysName = ap\n# finished in " in report
     assert seen["secrets"] == {"community": "public"}
     assert seen["args"].snmp_user is None
     assert seen["args"].snmp_max == 100
@@ -291,3 +291,5 @@ def test_mikrotik_profile_runs_each_command_as_ssh_exec(monkeypatch: pytest.Monk
     assert calls == [*PROFILES["mikrotik"], "/interface wireless registration-table print"]
     assert "'/system reboot' REFUSED" in transcript
     assert "output of /system identity print" in transcript and "\r" not in transcript
+    # The refused /system reboot isn't counted.
+    assert f"# finished: {len(PROFILES['mikrotik']) + 1} commands in " in transcript
