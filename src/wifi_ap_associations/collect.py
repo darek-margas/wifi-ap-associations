@@ -56,6 +56,9 @@ import re
 import sys
 import time
 import warnings
+from collections.abc import Sequence
+
+from wifi_ap_associations import AccessPointAuthError, AccessPointError
 
 warnings.filterwarnings("ignore", message="Diffie-Hellman over finite fields")
 
@@ -332,6 +335,52 @@ def run_ssh(args: argparse.Namespace) -> str | None:
             print("Try again with --legacy-ssh.", file=sys.stderr)
         return None
     return transcript if args.no_redact else redact(transcript, Redactor([password]))
+
+
+def legacy_ssh_hint(err: BaseException) -> bool:
+    """Whether a connection error looks like the AP needs the old SSH algorithms."""
+    text = str(err).lower()
+    return "no matching" in text or "algorithm" in text
+
+
+async def async_collect_ssh_report(
+    host: str,
+    username: str,
+    password: str,
+    *,
+    port: int = 22,
+    profile: str = "generic",
+    commands: Sequence[str] = (),
+    legacy_ssh: bool = False,
+) -> str:
+    """Collect over SSH and return the redacted report, review warning on top.
+
+    For programs such as the Home Assistant integration: the same commands, read-only
+    filter (commands that could change settings are refused) and redaction as the
+    wifi-ap-collect command. Raises ValueError for an unknown profile,
+    AccessPointAuthError for a rejected login and AccessPointError for any other
+    failure (its message says when legacy_ssh may help, see legacy_ssh_hint()).
+    """
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile {profile!r}")
+    import asyncssh
+
+    args = argparse.Namespace(
+        host=host,
+        port=port,
+        username=username,
+        profile=profile,
+        command=[c for c in commands if c.strip()],
+        legacy_ssh=legacy_ssh,
+    )
+    try:
+        transcript = await collect_ssh(args, password)
+    except asyncssh.PermissionDenied as err:
+        raise AccessPointAuthError("login rejected, check username and password") from err
+    except (OSError, asyncssh.Error) as err:
+        hint = "; try legacy SSH" if legacy_ssh_hint(err) and not legacy_ssh else ""
+        raise AccessPointError(f"connection failed: {err}{hint}") from err
+    return REVIEW_WARNING + redact(transcript, Redactor([password])) + "\n"
 
 
 # --- SNMP ---------------------------------------------------------------------------

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- **`collect.async_collect_ssh_report()`**: the SSH collector as a function, for programs
+  such as the Home Assistant integration (which now offers it in its UI). It runs the
+  same commands with the same read-only filter and redaction as `wifi-ap-collect` and
+  returns the report with the review warning on top. A rejected login raises
+  `AccessPointAuthError`, any other failure `AccessPointError` (its message suggests
+  legacy SSH when the algorithms don't match), an unknown profile `ValueError`.
+- The `wifi-ap-collect` command and the drivers are unchanged.
+
 ## 0.2.0
 
 The two command-line tools moved here from the integration's `scripts/` folder, unchanged

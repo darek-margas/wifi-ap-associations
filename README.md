@@ -105,6 +105,20 @@ Attach it to a
 issue. `wifi-ap-collect --help` lists all options (profiles, extra commands, legacy SSH,
 SNMPv3).
 
+From a program, the SSH collector is one call (same commands, read-only filter and
+redaction):
+
+```python
+from wifi_ap_associations.collect import async_collect_ssh_report
+
+report = await async_collect_ssh_report(
+    "192.168.1.2", "admin", "secret", profile="generic", legacy_ssh=False
+)
+```
+
+It returns the report text with the review warning on top, and raises
+`AccessPointAuthError` / `AccessPointError` like the drivers.
+
 ## Security
 
 The SSH drivers log in with a password and **do not verify the access point's host key**

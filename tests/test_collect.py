@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import asyncssh
 import pytest
 
+from wifi_ap_associations import AccessPointAuthError, AccessPointError, collect
 from wifi_ap_associations.collect import PROFILES, Redactor, _REFUSED, redact
 
 
@@ -48,3 +52,63 @@ def test_secret_looking_setting_is_blanked() -> None:
     report = redact("ssid=Home\nwpa_passphrase=correct horse battery")
     assert "correct horse" not in report
     assert "ssid=Home" in report
+
+
+# --- async_collect_ssh_report (the API the Home Assistant integration uses) ---------
+
+
+def _run(**kwargs):
+    return asyncio.run(
+        collect.async_collect_ssh_report("192.0.2.10", "admin", "hunter2", **kwargs)
+    )
+
+
+def test_report_is_redacted_with_warning_on_top(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = {}
+
+    async def fake_collect(args, password):
+        seen["args"], seen["password"] = args, password
+        return "# --- get clientinfo ---\n5c:ad:ba:12:34:56  -61  password=hunter2\nwpa_passphrase=topsecret"
+
+    monkeypatch.setattr(collect, "collect_ssh", fake_collect)
+    report = _run(profile="dlink_dap", commands=["show station", " "], legacy_ssh=True)
+    assert report.startswith(collect.REVIEW_WARNING)
+    assert "5C:AD:BA:XX:XX:01" in report
+    assert "hunter2" not in report and "topsecret" not in report
+    assert seen["password"] == "hunter2"
+    assert seen["args"].profile == "dlink_dap"
+    assert seen["args"].command == ["show station"]
+    assert seen["args"].legacy_ssh is True
+    assert seen["args"].port == 22
+
+
+def test_unknown_profile_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        _run(profile="nope")
+
+
+def test_rejected_login_is_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_collect(args, password):
+        raise asyncssh.PermissionDenied("bad password")
+    monkeypatch.setattr(collect, "collect_ssh", fake_collect)
+    with pytest.raises(AccessPointAuthError):
+        _run()
+
+
+def test_algorithm_mismatch_suggests_legacy_ssh(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_collect(args, password):
+        raise asyncssh.KeyExchangeFailed("No matching key exchange algorithm found")
+
+    monkeypatch.setattr(collect, "collect_ssh", fake_collect)
+    with pytest.raises(AccessPointError, match="try legacy SSH"):
+        _run()
+
+
+def test_unreachable_is_access_point_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_collect(args, password):
+        raise OSError("Connection refused")
+    monkeypatch.setattr(collect, "collect_ssh", fake_collect)
+    with pytest.raises(AccessPointError) as err:
+        _run()
+    assert not isinstance(err.value, AccessPointAuthError)
+    assert "legacy" not in str(err.value)
