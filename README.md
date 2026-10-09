@@ -97,8 +97,11 @@ wifi-ap-collect --list-profiles
 ```
 
 Passwords are asked for interactively (or taken from `$AP_PASSWORD`). `wifi-ap-collect`
-uses vetted profile commands and validates extra display commands (shell chaining,
-redirection, expansion and unsupported command families are refused), redacts MAC addresses (vendor prefix kept), IP and email addresses, the
+uses vetted profile commands and validates extra commands: `show` / `get` / `display`
+commands, read-only `ubus` calls and the usual client-list commands (`iw dev <if> station
+dump`, `iwinfo <if> assoclist`, `wlanconfig <if> list`, `wl assoclist`, MikroTik
+`/... print`) are accepted; shell chaining, redirection, expansion and anything else are
+refused. It redacts MAC addresses (vendor prefix kept), IP and email addresses, the
 secrets you typed and secret-looking settings, and writes `ap-report-<host>.txt`.
 **Read the report before sharing it**: automatic redaction can't recognise everything.
 Attach it to a

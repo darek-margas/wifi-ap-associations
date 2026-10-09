@@ -121,17 +121,36 @@ PROFILES: dict[str, list[str]] = {
     ],
 }
 
-_REFUSED = re.compile(
-    r"^\s*(set|apply|save|write|commit|delete|del|clear|reset|reboot|restart|reload|"
-    r"factory|upgrade|fota|erase|format|copy|passwd|password|snmp\s+(add|del|edit|resume|suspend)|"
-    r"ssl\s+freset|ping|traceroute)\b",
-    re.IGNORECASE,
+# Read-only commands that list wireless clients on common access point systems, as
+# whole-command patterns (a wireless interface name is \S+ without shell characters,
+# which the character check below already excludes).
+_CLIENT_LIST_COMMANDS = re.compile(
+    r"(?:"
+    r"iw dev \S+ (?:station dump|info)"  # Linux nl80211 (OpenWrt without ubus, DD-WRT)
+    r"|iw dev"
+    r"|iwinfo(?: \S+(?: (?:info|assoclist))?)?"  # OpenWrt
+    r"|wlanconfig \S+ list(?: sta)?"  # Atheros / madwifi (Ubiquiti airOS, older APs)
+    r"|wl(?: -i \S+)? (?:assoclist|sta_info \S+|status)"  # Broadcom
+    r"|config wlan [0-9]"  # D-Link DAP CLI: selects the radio for the following get commands
+    r"|/\S+(?: \S+)* print(?: detail)?"  # MikroTik, e.g. /interface wireless registration-table print
+    r")"
 )
+# MikroTik commands that change state even though the line ends in "print" (also as part
+# of a word, such as reset-configuration).
+_ROUTEROS_REFUSED = re.compile(
+    r"(?:^|[ /-])(?:set|add|remove|reset|enable|disable|reboot|shutdown|upgrade|import|export|run)"
+    r"(?:$|[ =-])"
+)
+
+
 def is_read_only_command(command: str) -> bool:
     """Accept vetted profile commands or a restricted custom display command.
 
     Complex shell syntax is allowed only in exact, maintained profile entries.
-    Custom commands cannot chain commands, redirect output or expand shell code.
+    Custom commands cannot chain commands, redirect output or expand shell code, and
+    must be a known display form: show/get/display commands, a few single-word
+    commands, read-only ubus calls, or the common client-list commands of Linux,
+    Broadcom, Atheros and MikroTik based access points.
     """
     command = command.strip()
     if any(command in commands for commands in PROFILES.values()):
@@ -145,6 +164,8 @@ def is_read_only_command(command: str) -> bool:
         return True
     if len(words) == 1 and words[0] in {"help", "?", "version", "info", "iwinfo", "mca-dump"}:
         return True
+    if _CLIENT_LIST_COMMANDS.fullmatch(" ".join(words)):
+        return words[0][0] != "/" or not _ROUTEROS_REFUSED.search(command)
     return len(words) == 4 and words[:2] == ["ubus", "call"] and (
         (words[2] == "system" and words[3] in {"board", "info"})
         or (words[2].startswith("hostapd.") and words[3] in {"get_status", "get_clients"})

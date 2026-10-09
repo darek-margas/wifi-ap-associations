@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.2
+
+- Collector: extra commands may also be the usual read-only client-list commands of
+  Linux, Broadcom, Atheros and MikroTik based access points (`iw dev <if> station dump`,
+  `iwinfo <if> assoclist`, `wlanconfig <if> list`, `wl assoclist`, `/... print`), and
+  D-Link's `config wlan <n>`. 0.4.1 refused them, though they are what a contributor
+  typically adds. MikroTik lines that would change something (`set`, `add`, `remove`,
+  `reset-configuration`, ...) are still refused.
+- Removed the unused list of refused command words left over from before 0.4.1.
+- A test checks the installed pysnmp engine can be closed (0.4.1 tested it with a fake).
+
 ## 0.4.1
 
 - OpenWrt: failed or malformed client-table reads now raise an AP error instead of reporting an empty client list. Missing ubus is detected even with section markers.

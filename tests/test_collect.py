@@ -226,3 +226,29 @@ def test_snmp_engine_is_closed_on_every_exit(monkeypatch: pytest.MonkeyPatch, ou
         with pytest.raises(expected):
             asyncio.run(collect.collect_snmp(None, {}))
     engine.close_dispatcher.assert_called_once_with()
+
+
+@pytest.mark.parametrize("command", [
+    "iw dev wlan0 station dump", "iw dev", "iwinfo wlan0 assoclist", "iwinfo phy0-ap0 info",
+    "wlanconfig ath0 list", "wlanconfig ath1 list sta", "wl assoclist", "wl -i eth1 assoclist",
+    "config wlan 1", "/interface wireless registration-table print",
+    "/interface wifi registration-table print detail", "/caps-man registration-table print",
+])
+def test_common_client_list_commands_are_allowed(command: str) -> None:
+    assert is_read_only_command(command)
+
+
+@pytest.mark.parametrize("command", [
+    "iw dev wlan0 set txpower fixed 100", "iw dev wlan0 del", "wl down", "wl -i eth1 down",
+    "wlanconfig ath0 destroy", "iwinfo wlan0 scan; reboot", "config wlan 1; reboot",
+    "/system reboot", "/interface wireless set 0 disabled=yes print",
+    "/interface wireless reset-configuration print", "/ip address remove 0 print",
+])
+def test_client_list_look_alikes_are_refused(command: str) -> None:
+    assert not is_read_only_command(command)
+
+
+def test_installed_pysnmp_engine_can_be_closed() -> None:
+    from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
+
+    assert callable(getattr(SnmpEngine, "close_dispatcher", None))
