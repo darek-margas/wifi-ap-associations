@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+- **New driver `cisco_wlc_ssh` (experimental): Cisco lightweight APs joined to a Catalyst
+  9800 controller** (IOS-XE), over the controller's SSH console. One access point per
+  Cisco AP, set up with the controller's login and the AP's name (`ap_name`, the unique
+  setting, since many APs share a controller). APs of one controller polled together
+  share a single login. Clients come from `show wireless client summary` (only the Run
+  state counts), SSIDs from `show wlan summary`, the band from the protocol column, and
+  the AP's model and location from `show ap summary`. No signal or connected time yet.
+  An AP the controller doesn't list or that isn't Registered, a refused command and a
+  client table shorter than announced are errors, not departures.
+- Built from a C9800-CL report (IOS-XE 17.15.5, C9120AXI) in
+  [wifi-association-presence#10](https://github.com/darek-margas/wifi-association-presence/issues/10);
+  experimental until confirmed on that controller.
+- `wifi-ap-probe --ap-name` for drivers that read one AP from a controller.
+
 ## 0.5.1
 
 - MikroTik (`wifi` package): a client that is still authenticating (no `A` flag in the

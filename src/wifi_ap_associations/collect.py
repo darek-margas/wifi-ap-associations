@@ -83,8 +83,6 @@ PROFILES: dict[str, list[str]] = {
         "info",
         "mca-dump",
     ],
-    # Cisco wireless LAN controllers (Catalyst 9800, IOS-XE). Lightweight APs (9120,
-    # 3802, 1815...) don't list clients themselves; the controller does.
     # OpenWrt: hostapd on ubus (JSON), the same calls the OpenWrt driver uses.
     "openwrt": [
         "ubus call system board",
@@ -113,6 +111,8 @@ PROFILES: dict[str, list[str]] = {
         "/interface wifiwave2 registration-table print terse",
         "/caps-man registration-table print terse",
     ],
+    # Cisco wireless LAN controllers (Catalyst 9800, IOS-XE). Lightweight APs (9120,
+    # 3802, 1815...) don't list clients themselves; the controller does.
     "cisco_wlc": [
         "terminal length 0",
         "show version | include Cisco IOS|uptime|Model",

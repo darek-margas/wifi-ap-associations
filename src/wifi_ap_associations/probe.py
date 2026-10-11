@@ -2,6 +2,7 @@
 
 Usage:
     wifi-ap-probe --type dlink_dap_ssh --host 192.168.1.231 --username admin
+    wifi-ap-probe --type cisco_wlc_ssh --host 192.168.1.20 --username ha --ap-name AP01
     wifi-ap-probe --list-types
 
 The password is asked for interactively (or taken from $AP_PASSWORD).
@@ -25,6 +26,7 @@ def main() -> int:
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--username")
+    parser.add_argument("--ap-name", help="AP name on the controller (cisco_wlc_ssh)")
     parser.add_argument("--list-types", action="store_true")
     args = parser.parse_args()
 

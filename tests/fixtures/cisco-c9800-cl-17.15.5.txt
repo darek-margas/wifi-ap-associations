@@ -1,0 +1,62 @@
+# Cisco C9800-CL, IOS-XE 17.15.5, two C9120AXI-B APs. From the report attached to
+# darek-margas/wifi-association-presence#10 (redacted by the reporter; masked MAC
+# digits replaced by 00 and the masked IPv4 prefix by 192.0.2., same lengths). Note that the
+# redaction shortened the IPs in "show ap summary", shifting State and Location.
+# --- show ap summary ---
+show ap summary
+Number of APs: 2
+
+CC = Country Code
+RD = Regulatory Domain
+
+AP Name                          Slots AP Model             Ethernet MAC   Radio MAC      CC   RD   IP Address                                State        Location
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+AP02                             2     C9120AXI-B           548a.ba00.0001 548a.ba00.0002 US   -B   192.0.2.22                              Registered   default location                
+AP01                             2     C9120AXI-B           c884.a100.0003 c884.a100.0004 US   -B   192.0.2.21                              Registered   default location                
+
+C9800#
+# --- show wlan summary ---
+show wlan summary
+Number of WLANs: 4
+
+ID   Profile Name                     SSID                             Status 2.4GHz/5GHz Security                                                                                 6GHz Security                                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+1    <redacted2.4GHzNet>              <redacted2.4GHzNet>              UP     [WPA2][PSK][AES]                                                                                                                                                                                          
+2    <redacted5GHzNet>                <redacted5GHzNet>                UP     [WPA2][PSK][AES]                                                                                                                                                                                          
+3    <redactedIoTNet>                 <redactedIoTNet>                 UP     [WPA2][PSK][AES]                                                                                                                                                                                          
+30   <redactedOtherNet>               <redactedOtherNet>               UP     [WPA2][PSK][AES]                                                                                                                                                                                          
+
+C9800#
+# --- show wireless client summary ---
+show wireless client summary
+Number of Clients: 23
+
+MAC Address    AP Name                                        Type ID   State             Protocol   Method     Role               
+---------------------------------------------------------------------------------------------------------------------------------
+0c95.0500.0005 AP02                                           WLAN 3    Run               11n(2.4)   None       Local              
+18b4.3000.0006 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+18ef.3a00.0007 AP02                                           WLAN 3    Run               11n(2.4)   None       Local              
+38de.ad00.0008 AP01                                           WLAN 2    Run               11ac       None       Local              
+4e62.3300.0009 AP01                                           WLAN 1    Run               11n(2.4)   None       Local              
+5002.9100.0010 AP02                                           WLAN 3    Run               11g        None       Local              
+588c.8100.0011 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+74f4.4100.0012 AP01                                           WLAN 1    Run               11ax(2.4)  None       Local              
+9888.e000.0013 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+9888.e000.0014 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+9888.e000.0015 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+a4f6.e800.0016 AP01                                           WLAN 2    Run               11ax(5)    None       Local              
+a846.7400.0017 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+ac84.c600.0018 AP02                                           WLAN 3    Run               11n(2.4)   None       Local              
+ac84.c600.0019 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+b0a4.6000.0020 AP01                                           WLAN 1    Run               11ax(2.4)  None       Local              
+b461.e900.0021 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+b461.e900.0022 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+bcd7.d400.0023 AP02                                           WLAN 3    Run               11n(2.4)   None       Local              
+bcd7.d400.0024 AP02                                           WLAN 3    Run               11n(2.4)   None       Local              
+d88b.4c00.0025 AP01                                           WLAN 3    Run               11n(2.4)   None       Local              
+d89c.6700.0026 AP01                                           WLAN 2    Run               11ac       None       Local              
+e4a4.7100.0027 AP01                                           WLAN 2    Run               11ac       None       Local              
+
+Number of Excluded Clients: 0
+
+C9800#

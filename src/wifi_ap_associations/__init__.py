@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 
 class AccessPointError(Exception):
@@ -157,5 +157,11 @@ def normalize_mac(mac: str) -> str:
 
 
 # Import the driver modules last so they can use the definitions above and register.
-from . import dlink_dap_ssh, mikrotik_ssh, openwrt_ssh, unifi_network  # noqa: E402, F401
+from . import (  # noqa: E402, F401
+    cisco_wlc_ssh,
+    dlink_dap_ssh,
+    mikrotik_ssh,
+    openwrt_ssh,
+    unifi_network,
+)
 
