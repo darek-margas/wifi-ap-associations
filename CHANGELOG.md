@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.1
+
+Follow-ups from a review of the Cisco SSH signal readings.
+
+- **Due refreshes can't be starved by new clients.** While readings are due, up to 5 of
+  a read's 15 client details go to the oldest of them first. Before, a steady stream of
+  new or roaming clients could take every slot until established clients' readings
+  expired, and the signal sensors would dip for that reason alone.
+- **The 10 s detail budget is a hard limit:** each detail waits at most for the time
+  left, not a full 5 s past the budget.
+- Documented: a client that disconnects and reconnects between two polls keeps showing
+  its earlier, longer connected time until its next reading. (One missing from a read
+  already loses its reading.)
+
 ## 0.8.0
 
 - **`cisco_wlc_ssh` reads signal and connected time.** They are only in each client's

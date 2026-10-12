@@ -41,7 +41,9 @@ Asking for every client every minute would load the controller, so each read ask
 a few, in turns (see pick_details): clients without a reading first, then those that
 moved to another AP, then the oldest readings; a reading under REFRESH_SECONDS old is
 kept. A reading counts only while the client stays on the AP it was read on, and for
-SIGNAL_MAX_AGE; its connected time is carried forward. A detail that fails is skipped:
+SIGNAL_MAX_AGE; its connected time is carried forward. A client that leaves and comes
+back between two polls keeps showing the earlier, longer connected time until its next
+reading (one missing from a read loses its reading). A detail that fails is skipped:
 presence comes from the summary alone. A controller that refuses the command (e.g. a
 user without the privilege) isn't asked again for DETAILS_PAUSE.
 EXPERIMENTAL until a tester confirms it on a real controller.
@@ -122,6 +124,7 @@ COMMANDS = {
 }
 DETAIL_COMMAND = "show wireless client mac-address {mac} detail"
 DETAILS_PER_READ = 15  # at most this many client details per read
+REFRESH_SLOTS = 5  # of those, kept for due refreshes while new clients keep coming
 DETAILS_BUDGET = 10  # seconds of a read spent on details, at most
 DETAIL_TIMEOUT = 5  # seconds for one detail's answer
 REFRESH_SECONDS = 120  # a reading this young isn't read again
@@ -302,27 +305,30 @@ def parse_client_detail(output: str, now: float) -> tuple[str, ClientReading] | 
 def pick_details(
     clients: list[ControllerClient], readings: dict[str, ClientReading], now: float
 ) -> list[str]:
-    """MACs whose detail to read now, most needed first, at most DETAILS_PER_READ.
+    """MACs whose detail to read now, at most DETAILS_PER_READ, in reading order.
 
-    Clients without a reading first, then those that moved to another AP since theirs
-    (its signal belongs to the old AP), then the oldest readings. Readings younger than
-    REFRESH_SECONDS on the same AP are kept as they are.
+    Clients without a reading and those that moved to another AP since theirs (its
+    signal belongs to the old AP) come first, then the oldest readings. Readings younger
+    than REFRESH_SECONDS on the same AP are kept as they are. While readings are due, up
+    to REFRESH_SLOTS of a read go to the oldest of them first, so a steady stream of new
+    or roaming clients can't keep postponing them until they expire.
     """
-    due = []
+    urgent: list[tuple[tuple[int, float], str]] = []
+    due: list[tuple[float, str]] = []
     for client in clients:
         if client.state != STATE_RUN:
             continue
         reading = readings.get(client.mac)
         if reading is None:
-            rank = (0, 0.0)
+            urgent.append(((0, 0.0), client.mac))
         elif reading.ap_name != client.ap_name:
-            rank = (1, reading.read_at)
+            urgent.append(((1, reading.read_at), client.mac))
         elif now - reading.read_at >= REFRESH_SECONDS:
-            rank = (2, reading.read_at)
-        else:
-            continue
-        due.append((rank, client.mac))
-    return [mac for _rank, mac in sorted(due)][:DETAILS_PER_READ]
+            due.append((reading.read_at, client.mac))
+    oldest = [mac for _at, mac in sorted(due)]
+    reserved = oldest[:REFRESH_SLOTS]
+    picked = reserved + [mac for _rank, mac in sorted(urgent)][: DETAILS_PER_READ - len(reserved)]
+    return picked + oldest[len(reserved) :][: DETAILS_PER_READ - len(picked)]
 
 
 def with_readings(
@@ -453,11 +459,14 @@ async def _read_details(
     """
     started = time.monotonic()
     for mac in pick_details(data.clients, readings, started):
-        if time.monotonic() - started > DETAILS_BUDGET:
+        remaining = DETAILS_BUDGET - (time.monotonic() - started)
+        if remaining <= 0:
             break
         try:
             output = await _run(
-                process, DETAIL_COMMAND.format(mac=cisco_mac(mac)), timeout=DETAIL_TIMEOUT
+                process,
+                DETAIL_COMMAND.format(mac=cisco_mac(mac)),
+                timeout=min(DETAIL_TIMEOUT, remaining),  # the budget is a hard limit
             )
         except (AccessPointError, TimeoutError):
             break

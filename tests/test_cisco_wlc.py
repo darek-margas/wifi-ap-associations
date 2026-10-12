@@ -18,6 +18,7 @@ from wifi_ap_associations.cisco_wlc import ClientReading, ControllerClient, Cont
 from wifi_ap_associations.cisco_wlc_ssh import (
     COMMANDS,
     DETAILS_PER_READ,
+    REFRESH_SLOTS,
     SIGNAL_MAX_AGE,
     CiscoWlcSsh,
     band_for_protocol,
@@ -326,8 +327,9 @@ def test_pick_details_new_then_roamed_then_oldest() -> None:
         "00:00:00:00:00:03": ClientReading("AP01", -50, 10, now - 30),
         "00:00:00:00:00:06": ClientReading("AP01", -50, 10, now - 500),
     }
+    # Due refreshes (oldest first) take their reserved slots, then new, then roamed.
     assert pick_details(clients, readings, now) == [
-        "00:00:00:00:00:04", "00:00:00:00:00:03", "00:00:00:00:00:06", "00:00:00:00:00:02",
+        "00:00:00:00:00:06", "00:00:00:00:00:02", "00:00:00:00:00:04", "00:00:00:00:00:03",
     ]
     many = [_client(f"00:00:00:00:01:{i:02X}") for i in range(40)]
     assert len(pick_details(many, {}, now)) == DETAILS_PER_READ
@@ -407,4 +409,29 @@ def test_detail_that_never_answers_ends_details_not_the_read(monkeypatch) -> Non
     sent: list[str] = []
     results, _ = _poll_all(monkeypatch, sent, lambda mac: None)
     assert len(_details(sent)) == 1
+    assert [len(ap.clients) for ap in results[0]] == [17, 6]
+
+
+def test_new_clients_cannot_starve_due_refreshes() -> None:
+    now = 10_000.0
+    newcomers = [_client(f"00:00:00:00:01:{i:02X}") for i in range(30)]
+    regulars = [_client(f"00:00:00:00:02:{i:02X}") for i in range(10)]
+    readings = {c.mac: ClientReading("AP01", -50, 10, now - 300 - i) for i, c in enumerate(regulars)}
+    picked = pick_details(newcomers + regulars, readings, now)
+    assert len(picked) == DETAILS_PER_READ
+    refreshed = [mac for mac in picked if mac in readings]
+    assert len(refreshed) == REFRESH_SLOTS
+    # The oldest readings are the ones refreshed.
+    assert refreshed == sorted(readings, key=lambda mac: readings[mac].read_at)[:REFRESH_SLOTS]
+
+
+def test_detail_budget_is_a_hard_limit(monkeypatch) -> None:
+    import time
+
+    monkeypatch.setattr(cisco_wlc_ssh, "DETAIL_TIMEOUT", 5)
+    monkeypatch.setattr(cisco_wlc_ssh, "DETAILS_BUDGET", 0.3)
+    sent: list[str] = []
+    started = time.monotonic()
+    results, _ = _poll_all(monkeypatch, sent, lambda mac: None)
+    assert time.monotonic() - started < 2  # not the 5 s one detail may take
     assert [len(ap.clients) for ap in results[0]] == [17, 6]
