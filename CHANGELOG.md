@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1
+
+- **SNMP host types** for the collector: `--profile c9800` (Cisco Catalyst 9800) or
+  `--profile cisco_wlc` (any Cisco wireless controller) with `--snmp` walks only that
+  controller's tables instead of the whole vendor subtree, each up to 50000 values, so
+  client tables aren't cut off by the limit. `c9800` is the narrow set: client table,
+  client statistics (signal), AP table and Cisco's client MIB; `cisco_wlc` adds Cisco's AP
+  and WLAN MIBs and may grow as other controllers report in.
+  `async_collect_snmp_report(profile=...)` for programs; `--list-profiles` lists them.
+- SNMP collector on Cisco controllers: also walks the Airespace client statistics table
+  (`bsnMobileStationStatsTable`, `1.3.6.1.4.1.14179.2.1.6`, where per-client RSSI and SNR
+  are) and the whole CISCO-LWAPP-DOT11-CLIENT-MIB (`1.3.6.1.4.1.9.9.599.1`) instead of
+  only its client table. A C9800-CL report had no signal at all: these tables weren't
+  walked, and the Cisco subtree reached its value limit on the flash file table first.
+
 ## 0.6.0
 
 - **New driver `cisco_wlc_ssh` (experimental): Cisco lightweight APs joined to a Catalyst

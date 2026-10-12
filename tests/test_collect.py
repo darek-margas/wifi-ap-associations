@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 
 import asyncssh
@@ -189,6 +190,94 @@ def test_snmp_protocol_names_exist_in_installed_pysnmp() -> None:
         assert hasattr(hlapi, name), name
     for name in ("CommunityData", "UsmUserData", "UdpTransportTarget", "bulk_walk_cmd", "get_cmd"):
         assert hasattr(hlapi, name), name
+
+
+def test_cisco_reports_walk_client_signal_tables() -> None:
+    # A C9800 report had no signal at all: the statistics tables weren't walked, and the
+    # vendor subtree ran out of values long before reaching them.
+    roots = set(collect.VENDOR_EXTRA_ROOTS[9].values())
+    assert "1.3.6.1.4.1.14179.2.1.6" in roots  # bsnMobileStationStatsTable (RSSI, SNR)
+    assert "1.3.6.1.4.1.9.9.599.1" in roots  # CISCO-LWAPP-DOT11-CLIENT-MIB objects
+    # No root inside another: that would walk the same values twice.
+    for root in roots:
+        assert not any(root.startswith(other + ".") for other in roots - {root}), root
+
+
+class _Integer:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def prettyPrint(self) -> str:
+        return str(self.value)
+
+
+def _fake_agent(monkeypatch: pytest.MonkeyPatch, values_per_root: int) -> list[str]:
+    """A Cisco controller answering every walk with a few integers; returns walked roots."""
+    import pysnmp.hlapi.v3arch.asyncio as hlapi
+
+    walked: list[str] = []
+
+    class Text(_Integer):
+        pass
+
+    async def get_cmd(*args, **kwargs):
+        system = ["descr", "1.3.6.1.4.1.9.1.2391", "100", "C9800"]
+        return None, None, 0, [(oid, Text(v)) for oid, v in zip(collect.SYSTEM_OIDS.values(), system)]
+
+    async def bulk_walk_cmd(engine, auth, target, context, _n, _r, object_type, **kwargs):
+        root = object_type  # ObjectType and ObjectIdentity are pass-through here
+        walked.append(root)
+        for i in range(values_per_root):
+            yield None, None, 0, [(f"{root}.1.{i}", _Integer(i))]
+
+    monkeypatch.setattr(hlapi, "ObjectIdentity", lambda oid: oid)
+    monkeypatch.setattr(hlapi, "ObjectType", lambda identity: identity)
+    monkeypatch.setattr(hlapi, "get_cmd", get_cmd)
+    monkeypatch.setattr(hlapi, "bulk_walk_cmd", bulk_walk_cmd)
+    return walked
+
+
+def _snmp_args(**overrides) -> argparse.Namespace:
+    base = dict(
+        snmp_user=None, snmp_root=[], snmp_max=2, snmp_full_values=False,
+        no_redact=False, profile="generic",
+    )
+    return argparse.Namespace(**{**base, **overrides})
+
+
+@pytest.mark.parametrize("profile", ["cisco_wlc", "c9800"])
+def test_snmp_host_type_walks_only_its_tables_without_the_small_limit(
+    monkeypatch: pytest.MonkeyPatch, profile: str
+) -> None:
+    walked = _fake_agent(monkeypatch, values_per_root=3)
+    report = asyncio.run(
+        collect._collect_snmp_tables(_snmp_args(profile=profile), {}, None, None, None, None)
+    )
+    tables = list(collect.SNMP_PROFILES[profile].values())
+    assert walked == [*tables, *collect.STANDARD_ROOTS.values()]
+    assert "1.3.6.1.4.1.9" not in walked  # no vendor subtree walk
+    assert any(line.startswith(f"# host type: {profile}") for line in report)
+    # The host type's tables are complete; the standard ones still stop at --snmp-max.
+    stopped = [line for line in report if line.startswith("# stopped after")]
+    assert len(stopped) == len(collect.STANDARD_ROOTS)
+
+
+def test_c9800_is_the_narrow_cisco_host_type() -> None:
+    c9800 = collect.SNMP_PROFILES["c9800"]
+    assert set(c9800.values()) < set(collect.SNMP_PROFILES["cisco_wlc"].values())
+    assert "1.3.6.1.4.1.14179.2.1.6" in c9800.values()  # client signal
+
+
+def test_snmp_generic_walks_the_vendor_subtree(monkeypatch: pytest.MonkeyPatch) -> None:
+    walked = _fake_agent(monkeypatch, values_per_root=1)
+    asyncio.run(collect._collect_snmp_tables(_snmp_args(), {}, None, None, None, None))
+    assert "1.3.6.1.4.1.9" in walked
+    assert "1.3.6.1.4.1.9.9.513.1" not in walked  # cisco_wlc's extra MIBs are opt-in
+
+
+def test_snmp_unknown_host_type_is_refused() -> None:
+    with pytest.raises(ValueError, match="host type"):
+        asyncio.run(collect.async_collect_snmp_report("192.0.2.1", community="x", profile="dlink_dap"))
 
 
 

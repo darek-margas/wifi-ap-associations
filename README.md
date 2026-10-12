@@ -95,6 +95,7 @@ wifi-ap-probe --list-types
 # Collect read-only, redacted data from an access point that has no driver yet
 wifi-ap-collect --host 192.168.1.2 --username admin
 wifi-ap-collect --host 192.168.1.2 --snmp            # SNMP v2c, asks for the community
+wifi-ap-collect --host 192.168.1.2 --snmp --profile c9800  # only a Cisco 9800's tables
 wifi-ap-collect --list-profiles
 ```
 

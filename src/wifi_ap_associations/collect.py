@@ -13,6 +13,10 @@ tables that look like client tables (MAC addresses in values or indexes).
     wifi-ap-collect --host 192.0.2.10 --snmp                 # v2c, asks for community
     wifi-ap-collect --host 192.0.2.10 --snmp --snmp-user ro  # v3, SHA/AES
     wifi-ap-collect --host 192.0.2.10 --snmp --snmp-root 1.3.6.1.4.1.14988.1.1.1.2
+    wifi-ap-collect --host 192.0.2.10 --snmp --profile c9800      # Catalyst 9800
+With a host type (--profile cisco_wlc: Cisco wireless controllers; c9800: only the
+client, signal and AP tables of a Catalyst 9800) only its tables are walked, each up to
+50000 values, instead of the whole vendor subtree.
 
 Both redact MAC addresses (vendor prefix kept, also inside SNMP OID indexes), IPv4
 addresses and secret-looking settings, and write a report you can attach to a GitHub
@@ -20,6 +24,7 @@ issue ("New access point model"). Review the report before sharing it.
 
 Options:
     --profile NAME     SSH: a known command list (see --list-profiles); default: generic
+                       SNMP: a host type, cisco_wlc or c9800; default: generic
     --command CMD      SSH: extra command to run (repeatable)
     --legacy-ssh       SSH: allow old algorithms (diffie-hellman-group1/14-sha1, ssh-rsa, CBC)
     --snmp             use SNMP instead of SSH
@@ -503,14 +508,34 @@ STANDARD_ROOTS = {
 }
 ENTERPRISE_PREFIX = "1.3.6.1.4.1."
 # Client and AP tables some vendors keep outside their own enterprise subtree, walked
-# in addition to it (e.g. Cisco 9800 controllers serve the Airespace wireless MIB).
+# before it, each with its own value limit (e.g. Cisco 9800 controllers serve the
+# Airespace wireless MIB). Inside the vendor subtree they may never be reached: on a
+# C9800-CL the flash file table alone used 3600 of the 5000 values.
 VENDOR_EXTRA_ROOTS = {
     9: {
         "Airespace client table (bsnMobileStationTable)": "1.3.6.1.4.1.14179.2.1.4",
+        # Signal (RSSI, SNR) and counters per client; not in the client table itself.
+        "Airespace client statistics (bsnMobileStationStatsTable)": "1.3.6.1.4.1.14179.2.1.6",
         "Airespace AP table (bsnAPTable)": "1.3.6.1.4.1.14179.2.2.1",
-        "CISCO-LWAPP-DOT11-CLIENT-MIB (cldcClientTable)": "1.3.6.1.4.1.9.9.599.1.3.1",
+        # The whole client MIB: the client table plus its per-client statistics.
+        "CISCO-LWAPP-DOT11-CLIENT-MIB (client and statistics tables)": "1.3.6.1.4.1.9.9.599.1",
     },
 }
+# SNMP host types (--profile with --snmp): walk only these tables instead of the vendor
+# subtree, each up to SNMP_PROFILE_MAX_VALUES values, so a busy controller's client
+# tables are complete. The standard roots and --snmp-root are still walked.
+# cisco_wlc is any Cisco wireless controller and may grow as other models report in;
+# c9800 stays the narrow set a Catalyst 9800 is known to answer (clients, their signal,
+# APs).
+SNMP_PROFILES = {
+    "cisco_wlc": {
+        **VENDOR_EXTRA_ROOTS[9],
+        "CISCO-LWAPP-AP-MIB (APs and radios)": "1.3.6.1.4.1.9.9.513.1",
+        "CISCO-LWAPP-WLAN-MIB (WLANs)": "1.3.6.1.4.1.9.9.512.1",
+    },
+    "c9800": VENDOR_EXTRA_ROOTS[9],
+}
+SNMP_PROFILE_MAX_VALUES = 50000
 # Only for the report header; the enterprise number itself is what matters.
 KNOWN_ENTERPRISES = {
     9: "Cisco",
@@ -681,20 +706,34 @@ async def _collect_snmp_tables(args, secrets, engine, auth, target, context) -> 
         report.append(f"{name} = {shown}")
 
     roots: dict[str, str] = {}
+    limits: dict[str, int] = {}  # per-section value limit where it isn't --snmp-max
     object_id = system.get("sysObjectID", "")
+    profile = getattr(args, "profile", "generic")
     if object_id.startswith(ENTERPRISE_PREFIX):
         number = int(object_id[len(ENTERPRISE_PREFIX) :].split(".")[0])
         vendor = KNOWN_ENTERPRISES.get(number, "unknown vendor")
         report.append(f"# enterprise number: {number} ({vendor})")
+    else:
+        number = None
+        report.append("# sysObjectID has no enterprise number")
+    if profile in SNMP_PROFILES:
+        report.append(
+            f"# host type: {profile} (its tables only, up to {SNMP_PROFILE_MAX_VALUES}"
+            " values each; no vendor subtree walk)"
+        )
+        roots |= SNMP_PROFILES[profile]
+        limits |= dict.fromkeys(SNMP_PROFILES[profile], SNMP_PROFILE_MAX_VALUES)
+    elif number is not None:
         roots |= VENDOR_EXTRA_ROOTS.get(number, {})
         roots[f"vendor subtree ({vendor})"] = f"{ENTERPRISE_PREFIX}{number}"
     else:
-        report.append("# sysObjectID has no enterprise number; walking standard MIBs only")
+        report.append("# walking standard MIBs only")
     roots |= STANDARD_ROOTS
     roots |= {f"--snmp-root {oid}": oid for oid in args.snmp_root or []}
 
     rows: list[tuple[str, str, str]] = []  # (section, oid, formatted value)
     for section, root in roots.items():
+        limit = limits.get(section, args.snmp_max)
         count = 0
         walker = bulk_walk_cmd(
             engine, auth, target, context, 0, 25,
@@ -707,8 +746,8 @@ async def _collect_snmp_tables(args, secrets, engine, auth, target, context) -> 
             for oid, value in binds:
                 rows.append((section, str(oid), _format_value(value)))
                 count += 1
-            if count >= args.snmp_max:
-                rows.append((section, root, f"# stopped after {count} values (--snmp-max)"))
+            if count >= limit:
+                rows.append((section, root, f"# stopped after {count} values (limit {limit})"))
                 break
         if count == 0:
             rows.append((section, root, f"# no values under {root}"))
@@ -793,6 +832,7 @@ async def async_collect_snmp_report(
     auth_protocol: str = "sha",
     priv_protocol: str = "aes",
     max_values: int = 5000,
+    profile: str = "generic",
 ) -> str:
     """Collect over SNMP and return the redacted report, review warning on top.
 
@@ -800,11 +840,15 @@ async def async_collect_snmp_report(
     `wifi-ap-collect --snmp`, values outside the likely client tables shown only as
     their length. SNMP v2c with `community`, or v3 with `user`, `auth_key` and
     `priv_key` (empty: same as the auth key) and the protocol names of SNMP_AUTH /
-    SNMP_PRIV. `max_values` limits each walked subtree. Raises ValueError for missing
-    or unknown settings, AccessPointAuthError when the v3 user or keys are rejected
+    SNMP_PRIV. `max_values` limits each walked subtree. `profile` is a host type of
+    SNMP_PROFILES (e.g. "cisco_wlc"): only its tables, up to SNMP_PROFILE_MAX_VALUES
+    each, instead of the vendor subtree; "generic" walks the vendor subtree. Raises
+    ValueError for missing or unknown settings, AccessPointAuthError when the v3 user or keys are rejected
     and AccessPointError for any other failure (v2c with a wrong community gets no
     answer at all, so it shows as no response).
     """
+    if profile != "generic" and profile not in SNMP_PROFILES:
+        raise ValueError(f"unknown SNMP host type {profile!r}")
     if user:
         if auth_protocol not in SNMP_AUTH or priv_protocol not in SNMP_PRIV:
             raise ValueError(f"unknown SNMPv3 protocol {auth_protocol!r} / {priv_protocol!r}")
@@ -825,6 +869,7 @@ async def async_collect_snmp_report(
         snmp_max=max_values,
         snmp_full_values=False,
         no_redact=False,
+        profile=profile,
     )
     started = time.monotonic()
     try:
@@ -877,7 +922,7 @@ def main() -> int:
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--username", default="admin")
-    parser.add_argument("--profile", default="generic", choices=sorted(PROFILES))
+    parser.add_argument("--profile", default="generic", choices=sorted({*PROFILES, *SNMP_PROFILES}))
     parser.add_argument("--command", action="append")
     parser.add_argument("--legacy-ssh", action="store_true")
     parser.add_argument("--snmp", action="store_true")
@@ -895,9 +940,18 @@ def main() -> int:
     if args.list_profiles:
         for name, commands in PROFILES.items():
             print(f"{name}: {', '.join(commands)}")
+        for name, roots in SNMP_PROFILES.items():
+            print(f"{name} (--snmp host type): {', '.join(roots.values())}")
         return 0
     if not args.host:
         parser.error("--host is required")
+    if args.snmp and args.profile != "generic" and args.profile not in SNMP_PROFILES:
+        parser.error(
+            f"--profile {args.profile} is an SSH command list; SNMP host types: "
+            + ", ".join(SNMP_PROFILES)
+        )
+    if not args.snmp and args.profile not in PROFILES:
+        parser.error(f"--profile {args.profile} is an SNMP host type; use it with --snmp")
     if args.port is None:
         args.port = 161 if args.snmp else 22
 
