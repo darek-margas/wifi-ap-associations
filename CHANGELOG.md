@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.2
+
+Follow-ups from the second review of the Cisco drivers.
+
+- **A shared controller read is stopped after 45 s** (a poll's limit). Before, a read
+  that never finished could be joined by every following poll, so the APs of that
+  controller would stay unavailable without a fresh attempt. Now it fails within one
+  cycle and the next poll reads again.
+- **The previous read lives with the shared reads and expires with them** (after 180 s,
+  three polls). Reads under settings since changed (the key holds the credentials) no
+  longer stay in memory for good.
+- Documented trade-off: a client caught mid-roam by an SNMP read may show its previous AP
+  for one more read, rather than briefly look gone.
+- Tests: a read that never answers, an AP poll timing out while another joins the same
+  read, and old reads being dropped.
+
 ## 0.7.1
 
 Fixes from a review of the Cisco drivers.

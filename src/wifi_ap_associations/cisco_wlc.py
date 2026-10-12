@@ -109,17 +109,52 @@ class SharedReads:
     others join it. A successful read is reused for `seconds`, then the next poll reads
     again. A failed one is shared only with the polls already waiting for it: the next
     poll tries again (e.g. right after fixing a setting). Reads are shielded: one AP's
-    poll timing out doesn't cancel the read the others wait for.
+    poll timing out doesn't cancel the read the others wait for. Each read is stopped
+    after `timeout` (a poll's limit), so a stuck one can't be joined poll after poll.
+
+    The last successful read of each controller is kept for `keep` seconds, for drivers
+    whose next read needs it (see last()). Older reads, also of settings since changed
+    (the key holds the credentials), are dropped.
     """
 
-    def __init__(self, seconds: float) -> None:
+    def __init__(self, seconds: float, timeout: float = 45, keep: float = 180) -> None:
         self.seconds = seconds
+        self.timeout = timeout
+        self.keep = keep
         self._reads: dict[Hashable, tuple[float, asyncio.Task[ControllerData]]] = {}
+        self._last: dict[Hashable, tuple[float, ControllerData]] = {}
+
+    def last(self, key: Hashable) -> ControllerData | None:
+        """The last successful read of this controller, if within `keep` seconds."""
+        entry = self._last.get(key)
+        if entry is None or time.monotonic() - entry[0] > self.keep:
+            return None
+        return entry[1]
+
+    def _forget_old(self) -> None:
+        now = time.monotonic()
+        for key in [k for k, (at, _data) in self._last.items() if now - at > self.keep]:
+            del self._last[key]
+        for key in [
+            k for k, (at, task) in self._reads.items() if task.done() and now - at > self.keep
+        ]:
+            del self._reads[key]
+
+    async def _run(
+        self, key: Hashable, read: Callable[[], Awaitable[ControllerData]]
+    ) -> ControllerData:
+        try:
+            data = await asyncio.wait_for(read(), self.timeout)
+        except TimeoutError as err:
+            raise AccessPointError(f"Controller read took over {self.timeout:g} s") from err
+        self._last[key] = (time.monotonic(), data)
+        return data
 
     async def read(
         self, key: Hashable, read: Callable[[], Awaitable[ControllerData]]
     ) -> ControllerData:
         loop = asyncio.get_running_loop()
+        self._forget_old()
         entry = self._reads.get(key)
         if (
             entry is None
@@ -133,6 +168,6 @@ class SharedReads:
                 )
             )
         ):
-            entry = (time.monotonic(), loop.create_task(read()))
+            entry = (time.monotonic(), loop.create_task(self._run(key, read)))
             self._reads[key] = entry
         return await asyncio.shield(entry[1])

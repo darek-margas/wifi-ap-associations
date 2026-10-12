@@ -22,6 +22,8 @@ The eight columns are walked at the same time, so a read takes about as long as 
 slowest column and the columns describe nearly the same moment. A client that joins,
 roams or leaves during a read can still be missing from some of them; such a client
 keeps what the previous read said about it (see parse_columns) rather than vanishing.
+The price: a client caught mid-roam may show its previous AP for one more read, which
+is better for presence than briefly showing it gone.
 """
 
 from __future__ import annotations
@@ -85,9 +87,8 @@ SNMP_RETRIES = 2
 SHARE_SECONDS = 20
 SNMP_VERSIONS = ("v2c", "v3")
 
+# Also keeps each controller's last read, for clients a read catches half-way.
 _shared = SharedReads(SHARE_SECONDS)
-# The last successful read of each controller, for clients a read catches half-way.
-_previous: dict[tuple[str, ...], ControllerData] = {}
 
 
 def _text(value: Any) -> str | None:
@@ -294,9 +295,8 @@ class CiscoWlcSnmp(AccessPointDriver):
         data = parse_columns(
             {name: values[oid] for name, oid in AP_COLUMNS.items()},
             {name: values[oid] for name, oid in CLIENT_COLUMNS.items()},
-            _previous.get(key),
+            _shared.last(key),
         )
-        _previous[key] = data
         return data
 
 

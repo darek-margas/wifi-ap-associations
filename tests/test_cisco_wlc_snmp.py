@@ -481,3 +481,81 @@ def test_real_pysnmp_wrong_key_is_an_auth_error(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(AccessPointAuthError):
         asyncio.run(main())
+
+
+# --- SharedReads lifecycle: stuck reads, timed-out callers, old reads -----------------
+
+
+def _data(name: str = "AP01"):
+    from wifi_ap_associations.cisco_wlc import ControllerData, JoinedAp
+
+    return ControllerData(
+        aps={name: JoinedAp(name=name, model=None, state="Registered", location=None)},
+        ssids={},
+        clients=[],
+    )
+
+
+def test_stuck_read_fails_within_its_timeout_and_the_next_poll_reads_again() -> None:
+    """A read that never answers can't be joined poll after poll."""
+    reads: list[str] = []
+
+    async def stuck():
+        reads.append("stuck")
+        await asyncio.Event().wait()  # never set
+
+    async def answers():
+        reads.append("fresh")
+        return _data()
+
+    async def main():
+        shared = SharedReads(20, timeout=0.2)
+        # This poll gives up first (its own, shorter limit); the read goes on, shielded.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(shared.read("c", stuck), 0.05)
+        # Another poll joins the still-running read and sees it stopped at its timeout.
+        with pytest.raises(AccessPointError, match="over 0.2 s"):
+            await shared.read("c", stuck)
+        # The next poll starts a fresh read rather than reusing the failure.
+        return await shared.read("c", answers)
+
+    assert asyncio.run(main()) == _data()
+    assert reads == ["stuck", "fresh"]
+
+
+def test_last_read_is_kept_for_a_while_then_dropped() -> None:
+    async def main():
+        shared = SharedReads(0, keep=0.1)
+
+        async def first():
+            return _data("AP01")
+
+        await shared.read("old-credentials", first)
+        assert shared.last("old-credentials") == _data("AP01")
+        await asyncio.sleep(0.15)
+        assert shared.last("old-credentials") is None
+        # Any later read drops what is too old, also under keys no longer used.
+        await shared.read("new-credentials", first)
+        return shared
+
+    shared = asyncio.run(main())
+    assert set(shared._last) == {"new-credentials"}
+    assert set(shared._reads) == {"new-credentials"}
+
+
+def test_failed_read_leaves_the_last_good_one() -> None:
+    async def main():
+        shared = SharedReads(0)
+
+        async def good():
+            return _data()
+
+        async def bad():
+            raise AccessPointError("no answer")
+
+        await shared.read("c", good)
+        with pytest.raises(AccessPointError):
+            await shared.read("c", bad)
+        return shared.last("c")
+
+    assert asyncio.run(main()) == _data()
