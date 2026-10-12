@@ -124,7 +124,10 @@ COMMANDS = {
 }
 DETAIL_COMMAND = "show wireless client mac-address {mac} detail"
 DETAILS_PER_READ = 15  # at most this many client details per read
-REFRESH_SLOTS = 5  # of those, kept for due refreshes while new clients keep coming
+# Of those, kept for due refreshes while new clients keep coming. At one poll a minute,
+# 5 refreshes keep about 50 steady clients' readings inside SIGNAL_MAX_AGE (more when
+# fewer clients are new); a larger controller shows signal for fewer of them at a time.
+REFRESH_SLOTS = 5
 DETAILS_BUDGET = 10  # seconds of a read spent on details, at most
 DETAIL_TIMEOUT = 5  # seconds for one detail's answer
 REFRESH_SECONDS = 120  # a reading this young isn't read again

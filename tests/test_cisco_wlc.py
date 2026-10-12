@@ -435,3 +435,26 @@ def test_detail_budget_is_a_hard_limit(monkeypatch) -> None:
     results, _ = _poll_all(monkeypatch, sent, lambda mac: None)
     assert time.monotonic() - started < 2  # not the 5 s one detail may take
     assert [len(ap.clients) for ap in results[0]] == [17, 6]
+
+
+def test_each_detail_waits_only_for_the_budget_left(monkeypatch) -> None:
+    """Deterministic: a fake clock, and the timeout each detail command is given."""
+    clock = [1000.0]
+    monkeypatch.setattr(cisco_wlc_ssh.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cisco_wlc_ssh, "DETAILS_BUDGET", 10)
+    monkeypatch.setattr(cisco_wlc_ssh, "DETAIL_TIMEOUT", 5)
+    timeouts: list[float] = []
+
+    async def run(process, command, timeout=cisco_wlc_ssh.COMMAND_TIMEOUT):
+        timeouts.append(timeout)
+        clock[0] += 4  # every detail takes 4 s of the budget
+        return detail_for(command.split()[4])
+
+    monkeypatch.setattr(cisco_wlc_ssh, "_run", run)
+    data = parse_controller(OUTPUTS)
+    readings: dict = {}
+    asyncio.run(cisco_wlc_ssh._read_details(None, data, readings))
+    # 10 s: 5 s, 5 s, then only the 2 s left; the next one isn't started.
+    assert timeouts == [5, 5, 2]
+    assert sum(min(t, 4) for t in timeouts) <= 10
+    assert len(readings) == 3
