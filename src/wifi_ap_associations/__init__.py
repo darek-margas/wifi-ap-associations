@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 
 class AccessPointError(Exception):
@@ -117,6 +117,25 @@ class AccessPointDriver(ABC):
     talking to the AP itself (e.g. "unifi": the UniFi Network integration). The
     integration then passes that source as the constructor's second argument and may
     offer UNIQUE_FIELD as a list of what the source knows. None for direct drivers."""
+
+    IDENTITY_FIELDS: ClassVar[tuple[str, ...]] = ()
+    """Settings that together identify one physical AP; empty means UNIQUE_FIELD alone.
+    Controller drivers use the controller's host plus the AP's name, so two controllers
+    may each have an AP01, while the same AP added over SSH and SNMP is a duplicate."""
+
+    @classmethod
+    def identity(cls, config: dict[str, Any]) -> tuple[str, ...] | None:
+        """The AP these settings point at, comparable across drivers; None if incomplete.
+
+        Two access points with equal identities are the same AP, even with different
+        types (e.g. one controller AP over SSH and over SNMP): adding both would count
+        its clients twice.
+        """
+        values = tuple(
+            str(config.get(key) or "").strip().casefold()
+            for key in cls.IDENTITY_FIELDS or (cls.UNIQUE_FIELD,)
+        )
+        return values if all(values) else None
 
     BLOCKING_IMPORTS: ClassVar[tuple[str, ...]] = ()
     """Modules the driver imports on its first poll that load files from disk (e.g.

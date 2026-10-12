@@ -73,6 +73,10 @@ asyncio.run(main())
 - Every driver lists its settings in `FIELDS` (key, whether it is secret, default,
   whether it may be left empty, and for some the only accepted values in `choices`), its
   display name in `NAME`, and the scale of `signal` in `SIGNAL_UNIT` (`"%"` or `"dBm"`).
+- `identity(config)` tells which physical AP a configuration points at (by
+  `IDENTITY_FIELDS`, else `UNIQUE_FIELD`), comparable across drivers: the Cisco drivers
+  use the controller's host plus the AP's name, so two controllers may each have an
+  AP01, while one AP added over SSH and SNMP is the same AP.
 - `BLOCKING_IMPORTS` names modules a driver loads on its first poll that read files from
   disk (pysnmp for the SNMP driver). In an asyncio program that must not block, import
   them in a worker thread first, as Home Assistant does.

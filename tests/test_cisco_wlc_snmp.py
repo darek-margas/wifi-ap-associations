@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import socket
+import time
 from pathlib import Path
 
 import pytest
 
 from wifi_ap_associations import DRIVERS, AccessPointAuthError, AccessPointError
 from wifi_ap_associations import cisco_wlc_snmp
-from wifi_ap_associations.cisco_wlc import poll_result
+from wifi_ap_associations.cisco_wlc import SharedReads, poll_result
 from wifi_ap_associations.cisco_wlc_snmp import (
     AP_COLUMNS,
     CLIENT_COLUMNS,
@@ -229,7 +231,7 @@ def test_aps_polled_together_share_one_read(monkeypatch: pytest.MonkeyPatch) -> 
     ap01, ap02 = asyncio.run(poll_both())
     assert (len(ap01.clients), len(ap02.clients)) == (16, 7)
     assert agent.engines == 1 and agent.closed == 1
-    assert agent.walks == [*AP_COLUMNS.values(), *CLIENT_COLUMNS.values()]
+    assert sorted(agent.walks) == sorted([*AP_COLUMNS.values(), *CLIENT_COLUMNS.values()])
 
 
 @pytest.mark.parametrize(
@@ -255,3 +257,227 @@ def test_no_answer_on_real_pysnmp(monkeypatch: pytest.MonkeyPatch) -> None:
     driver = CiscoWlcSnmp({"host": "127.0.0.1", "port": 9, "community": "x", "ap_name": "AP01"})
     with pytest.raises(AccessPointError, match="No SNMP response"):
         asyncio.run(driver.async_poll())
+
+
+# --- review follow-ups: identity, version, snapshots, timing, failed reads ----------
+
+
+def test_identity_is_controller_and_ap_name() -> None:
+    from wifi_ap_associations.cisco_wlc_ssh import CiscoWlcSsh
+
+    a = CiscoWlcSnmp.identity({"host": "192.0.2.20", "ap_name": "AP01"})
+    assert a == ("192.0.2.20", "ap01")
+    # Another controller's AP01 is another AP.
+    assert CiscoWlcSnmp.identity({"host": "192.0.2.30", "ap_name": "AP01"}) != a
+    # The same AP over SSH is the same AP (port and credentials don't matter).
+    assert CiscoWlcSsh.identity({"host": "192.0.2.20 ", "port": 22, "ap_name": "AP01"}) == a
+    assert CiscoWlcSnmp.identity({"host": "192.0.2.20"}) is None  # incomplete
+
+
+def test_snmp_version_decides_which_credentials_count() -> None:
+    import pysnmp.hlapi.v3arch.asyncio as hlapi
+
+    stale_v3 = {"host": "h", "username": "ro", "auth_key": "authsecret1", "community": "ro-c"}
+    # Switched to v2c: the stored v3 user is ignored, no clearing needed.
+    auth = CiscoWlcSnmp({**stale_v3, "snmp_version": "v2c"})._auth(hlapi)
+    assert isinstance(auth, hlapi.CommunityData)
+    auth = CiscoWlcSnmp({**stale_v3, "snmp_version": "v3"})._auth(hlapi)
+    assert isinstance(auth, hlapi.UsmUserData)
+    # Saved before snmp_version existed: v3 if a user is set, as before.
+    assert isinstance(CiscoWlcSnmp(stale_v3)._auth(hlapi), hlapi.UsmUserData)
+    with pytest.raises(AccessPointAuthError, match="user"):
+        CiscoWlcSnmp({"host": "h", "snmp_version": "v3", "auth_key": "k"})._auth(hlapi)
+
+
+def test_half_read_client_keeps_its_previous_ap_for_one_read() -> None:
+    aps, clients = fixture_columns()
+    previous = parse_columns(aps, clients)
+    roaming = "38:DE:AD:00:00:04"
+    # Its row vanished from the AP and state columns while they were walked.
+    del clients["ap"][roaming]
+    del clients["state"][roaming]
+    data = parse_columns(aps, clients, previous)
+    assert roaming in {c.mac for c in poll_result(data, "AP01").clients}
+    # Gone from every column: gone.
+    for column in clients.values():
+        column.pop(roaming, None)
+    assert roaming not in {c.mac for c in parse_columns(aps, clients, data).clients}
+
+
+def test_client_without_previous_read_waits_for_complete_details() -> None:
+    aps, clients = fixture_columns()
+    new = "38:DE:AD:00:00:04"
+    del clients["state"][new]  # joined between the column walks
+    assert new not in {c.mac for c in parse_columns(aps, clients).clients}
+
+
+def test_columns_are_walked_at_the_same_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Eight walks of 0.3 s each: together about 0.3 s, not 2.4 s."""
+    agent = FakeAgent()
+    agent.install(monkeypatch)
+    import pysnmp.hlapi.v3arch.asyncio as hlapi
+
+    walk = hlapi.bulk_walk_cmd
+
+    async def slow_walk(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        async for answer in walk(*args, **kwargs):
+            yield answer
+
+    monkeypatch.setattr(hlapi, "bulk_walk_cmd", slow_walk)
+    started = time.monotonic()
+    asyncio.run(CiscoWlcSnmp({**CONFIG, "ap_name": "AP01"}).async_poll())
+    assert time.monotonic() - started < 1.2
+
+
+def test_failed_read_is_not_reused_by_the_next_poll() -> None:
+    reads: list[int] = []
+
+    async def failing_read():
+        reads.append(1)
+        raise AccessPointError("no answer")
+
+    async def main():
+        shared = SharedReads(20)
+        for _ in range(2):
+            with pytest.raises(AccessPointError):
+                await shared.read("controller", failing_read)
+
+    asyncio.run(main())
+    assert len(reads) == 2  # the second poll tried again
+
+
+def test_concurrent_polls_share_a_failure() -> None:
+    reads: list[int] = []
+
+    async def failing_read():
+        reads.append(1)
+        await asyncio.sleep(0.05)
+        raise AccessPointError("no answer")
+
+    async def main():
+        shared = SharedReads(20)
+        return await asyncio.gather(
+            shared.read("c", failing_read),
+            shared.read("c", failing_read),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(main())
+    assert all(isinstance(r, AccessPointError) for r in results) and len(reads) == 1
+
+
+# --- end to end: the real pysnmp against a local agent serving the fixture ----------
+
+
+def _agent_rows():
+    from pysnmp.proto.api import v2c
+
+    rows = []
+    for column, mac, value in fixture_rows():
+        index = tuple(int(part, 16) for part in mac.split(":"))
+        oid = tuple(int(part) for part in column.split(".")) + index
+        snmp_value = v2c.OctetString(value) if isinstance(value, bytes) else v2c.Integer(value)
+        rows.append((oid, snmp_value))
+    return sorted(rows)
+
+
+async def _local_agent():
+    """An SNMP agent on 127.0.0.1 answering GET/GETNEXT/GETBULK from the fixture.
+
+    v2c community "public"; v3 user "ro" with SHA-256 "authsecret1" and AES "privsecret1".
+    """
+    from pysnmp.carrier.asyncio.dgram import udp
+    from pysnmp.entity import config, engine
+    from pysnmp.entity.rfc3413 import cmdrsp, context
+    from pysnmp.proto import rfc1905
+    from pysnmp.proto.api import v2c
+    from pysnmp.smi import instrum
+
+    data = _agent_rows()
+
+    class Table(instrum.AbstractMibInstrumController):
+        def read_variables(self, *var_binds, **ctx):
+            return [(name, rfc1905.noSuchInstance) for name, _ in var_binds]
+
+        def read_next_variables(self, *var_binds, **ctx):
+            answers = []
+            for name, _ in var_binds:
+                found = next(((o, v) for o, v in data if o > tuple(name)), None)
+                answers.append(
+                    (v2c.ObjectIdentifier(found[0]), found[1])
+                    if found
+                    else (name, rfc1905.endOfMibView)
+                )
+            return answers
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    agent = engine.SnmpEngine()
+    config.add_transport(
+        agent, udp.DOMAIN_NAME, udp.UdpTransport().open_server_mode(("127.0.0.1", port))
+    )
+    config.add_v1_system(agent, "area", "public")
+    config.add_vacm_user(agent, 2, "area", "noAuthNoPriv", (1, 3, 6))
+    config.add_v3_user(
+        agent, "ro", config.USM_AUTH_HMAC192_SHA256, "authsecret1",
+        config.USM_PRIV_CFB128_AES, "privsecret1",
+    )
+    config.add_vacm_user(agent, 3, "ro", "authPriv", (1, 3, 6))
+    snmp_context = context.SnmpContext(agent)
+    snmp_context.unregister_context_name(b"")
+    snmp_context.register_context_name(b"", Table())
+    for responder in (
+        cmdrsp.GetCommandResponder, cmdrsp.NextCommandResponder, cmdrsp.BulkCommandResponder
+    ):
+        responder(agent, snmp_context)
+    return agent, port
+
+
+V3 = {
+    "snmp_version": "v3", "username": "ro", "auth_key": "authsecret1",
+    "auth_protocol": "sha256", "priv_key": "privsecret1", "priv_protocol": "aes",
+}
+
+
+@pytest.mark.parametrize(
+    "credentials", [{"snmp_version": "v2c", "community": "public"}, V3], ids=["v2c", "v3"]
+)
+def test_real_pysnmp_against_a_local_agent(
+    monkeypatch: pytest.MonkeyPatch, credentials: dict
+) -> None:
+    monkeypatch.setattr(cisco_wlc_snmp, "_shared", cisco_wlc_snmp.SharedReads(20))
+
+    async def main():
+        agent, port = await _local_agent()
+        try:
+            config = {"host": "127.0.0.1", "port": port, **credentials}
+            return await asyncio.gather(
+                CiscoWlcSnmp({**config, "ap_name": "AP01"}).async_poll(),
+                CiscoWlcSnmp({**config, "ap_name": "AP02"}).async_poll(),
+            )
+        finally:
+            agent.close_dispatcher()
+
+    ap01, ap02 = asyncio.run(main())
+    assert (len(ap01.clients), len(ap02.clients)) == (16, 7)
+    assert ap01.info.model == "C9120AXI-B"
+    assert {c.band for c in ap01.clients} == {"2.4GHz", "5GHz"}
+
+
+def test_real_pysnmp_wrong_key_is_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cisco_wlc_snmp, "_shared", cisco_wlc_snmp.SharedReads(20))
+
+    async def main():
+        agent, port = await _local_agent()
+        try:
+            await CiscoWlcSnmp(
+                {"host": "127.0.0.1", "port": port, "ap_name": "AP01", **V3,
+                 "auth_key": "wrongsecret"}
+            ).async_poll()
+        finally:
+            agent.close_dispatcher()
+
+    with pytest.raises(AccessPointAuthError):
+        asyncio.run(main())

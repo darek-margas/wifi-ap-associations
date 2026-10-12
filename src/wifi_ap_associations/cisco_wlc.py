@@ -106,9 +106,10 @@ class SharedReads:
     """Controller reads in progress or just finished, shared by the APs of a controller.
 
     Home Assistant polls all APs at the same moment: the first starts the read, the
-    others join it. A finished read is reused for `seconds`, then the next poll reads
-    again. Reads are shielded: one AP's poll timing out doesn't cancel the read the
-    others wait for.
+    others join it. A successful read is reused for `seconds`, then the next poll reads
+    again. A failed one is shared only with the polls already waiting for it: the next
+    poll tries again (e.g. right after fixing a setting). Reads are shielded: one AP's
+    poll timing out doesn't cancel the read the others wait for.
     """
 
     def __init__(self, seconds: float) -> None:
@@ -123,7 +124,14 @@ class SharedReads:
         if (
             entry is None
             or entry[1].get_loop() is not loop
-            or (entry[1].done() and time.monotonic() - entry[0] > self.seconds)
+            or (
+                entry[1].done()
+                and (
+                    entry[1].cancelled()
+                    or entry[1].exception() is not None
+                    or time.monotonic() - entry[0] > self.seconds
+                )
+            )
         ):
             entry = (time.monotonic(), loop.create_task(read()))
             self._reads[key] = entry

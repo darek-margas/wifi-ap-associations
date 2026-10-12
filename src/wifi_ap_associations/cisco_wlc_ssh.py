@@ -251,6 +251,7 @@ class CiscoWlcSsh(AccessPointDriver):
     REPORTS = frozenset({"name", "location", "model"})
     # Many APs share one controller host; the AP name tells them apart.
     UNIQUE_FIELD = CONF_AP_NAME
+    IDENTITY_FIELDS = ("host", CONF_AP_NAME)
     SSH_POLICY = CISCO_SSH_POLICY
     FIELDS = (
         DriverField("host"),

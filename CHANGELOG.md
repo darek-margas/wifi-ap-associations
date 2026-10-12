@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.1
+
+Fixes from a review of the Cisco drivers.
+
+- **`cisco_wlc_snmp`: the eight columns are walked at the same time.** A read takes
+  about as long as its slowest column, instead of all eight one after another, which on
+  a slow controller could come close to the 45 s poll limit. All walks finish before
+  the SNMP engine closes, so a failed read leaves no late answers behind.
+- **A client caught half-way by a read keeps the previous read's details.** A client
+  missing from some columns (it roamed or re-associated while they were read) keeps its
+  AP and state for one more read instead of looking gone; one in no column is gone.
+- **SNMP version setting** (`snmp_version`: v2c or v3) decides which credentials are
+  used, so switching version needs no clearing of the other version's fields. Settings
+  without it work as before (v3 if a user is set).
+- **AP identity:** `identity()` and `IDENTITY_FIELDS`. Both Cisco drivers are identified
+  by the controller's host plus the AP's name, so two controllers may each have an AP01.
+- **A failed controller read is shared only with the polls already waiting for it**; the
+  next poll reads again instead of reusing the failure for 20 s.
+- `wifi-ap-probe --snmp-version`.
+- Tests run the real pysnmp against a local SNMP agent serving the 9800's columns (v2c,
+  v3 SHA-256/AES, wrong keys).
+
 ## 0.7.0
 
 - **New driver `cisco_wlc_snmp` (experimental): Cisco lightweight APs joined to a

@@ -15,7 +15,13 @@ which the 9800 serves (confirmed on a C9800-CL with IOS-XE 17.15.5):
 
 That is everything presence needs; per-client signal is in another table
 (bsnMobileStationStatsTable) and is added once a report confirms its columns. Until
-then signal is unknown. SNMP v2c with a community, or v3 with a user and keys.
+then signal is unknown. SNMP v2c with a community, or v3 with a user and keys, as the
+snmp_version setting says.
+
+The eight columns are walked at the same time, so a read takes about as long as its
+slowest column and the columns describe nearly the same moment. A client that joins,
+roams or leaves during a read can still be missing from some of them; such a client
+keeps what the previous read said about it (see parse_columns) rather than vanishing.
 """
 
 from __future__ import annotations
@@ -77,8 +83,11 @@ AP_STATES = {1: STATE_REGISTERED, 2: "Disassociating", 3: "Downloading"}
 SNMP_TIMEOUT = 2  # seconds per request
 SNMP_RETRIES = 2
 SHARE_SECONDS = 20
+SNMP_VERSIONS = ("v2c", "v3")
 
 _shared = SharedReads(SHARE_SECONDS)
+# The last successful read of each controller, for clients a read catches half-way.
+_previous: dict[tuple[str, ...], ControllerData] = {}
 
 
 def _text(value: Any) -> str | None:
@@ -105,14 +114,18 @@ def _int(value: Any) -> int | None:
 
 
 def parse_columns(
-    aps: dict[str, dict[str, Any]], clients: dict[str, dict[str, Any]]
+    aps: dict[str, dict[str, Any]],
+    clients: dict[str, dict[str, Any]],
+    previous: ControllerData | None = None,
 ) -> ControllerData:
     """All APs and clients from walked columns: {column: {row MAC: value}}.
 
     Keys are those of AP_COLUMNS and CLIENT_COLUMNS; values are bytes for text and MACs,
-    ints for numbers. The columns are walked one after another, so a client that joins
-    or leaves meanwhile may be missing from some of them: it is left out of this read
-    rather than shown with half its details.
+    ints for numbers. A client listed in some columns but not others (it joined, roamed
+    or left while they were read) takes the missing details from the previous read: a
+    client already known keeps its AP and state for one more read instead of looking
+    gone, and one that just left disappears a read later, once no column lists it. A
+    client the previous read didn't know is left out until a read has all its details.
     """
     joined: dict[str, JoinedAp] = {}
     name_by_mac: dict[str, str] = {}
@@ -127,21 +140,28 @@ def parse_columns(
             location=ap_location(_text(aps.get("location", {}).get(ap_mac))),
         )
         name_by_mac[ap_mac] = name
+    known = {client.mac: client for client in previous.clients} if previous else {}
     found = []
-    for mac, raw_state in clients.get("state", {}).items():
-        ap_mac = _mac(clients.get("ap", {}).get(mac))
-        state = _text(raw_state)
-        if ap_mac is None or state is None:
-            continue
+    for mac in sorted({mac for column in clients.values() for mac in column}):
+        ap_name = name_by_mac.get(_mac(clients.get("ap", {}).get(mac)) or "")
+        state = _text(clients.get("state", {}).get(mac))
+        before = known.get(mac)
+        if ap_name is None or state is None:
+            if before is None:
+                continue
+            ap_name = ap_name or before.ap_name
+            state = state or before.state
+        ssid = _text(clients.get("ssid", {}).get(mac))
+        band = PROTOCOL_BANDS.get(_int(clients.get("protocol", {}).get(mac)) or 0)
         found.append(
             ControllerClient(
                 mac=mac,
-                ap_name=name_by_mac.get(ap_mac, ""),
+                ap_name=ap_name,
                 wlan_id=None,
                 state=state,
                 protocol=None,
-                ssid=_text(clients.get("ssid", {}).get(mac)),
-                band=PROTOCOL_BANDS.get(_int(clients.get("protocol", {}).get(mac)) or 0),
+                ssid=ssid or (before.ssid if before else None),
+                band=band or (before.band if before else None),
             )
         )
     return ControllerData(aps=joined, ssids={}, clients=found)
@@ -175,12 +195,15 @@ class CiscoWlcSnmp(AccessPointDriver):
     EXPERIMENTAL = True
     REPORTS = frozenset({"name", "location", "model"})
     UNIQUE_FIELD = CONF_AP_NAME
+    IDENTITY_FIELDS = ("host", CONF_AP_NAME)
     BLOCKING_IMPORTS = ("pysnmp.hlapi.v3arch.asyncio",)
     FIELDS = (
         DriverField("host"),
         DriverField("port", default=161),
         DriverField(CONF_AP_NAME),
-        # v2c: the community. v3: the user and keys (the community stays empty).
+        # Which credentials count; the other version's may stay stored, unused, so
+        # switching version needs no clearing of fields.
+        DriverField("snmp_version", default="v2c", choices=SNMP_VERSIONS),
         DriverField("community", secret=True, optional=True),
         DriverField("username", optional=True),
         DriverField("auth_key", secret=True, optional=True),
@@ -200,13 +223,22 @@ class CiscoWlcSnmp(AccessPointDriver):
             for field in self.FIELDS
             if field.key != CONF_AP_NAME
         )
-        data = await _shared.read(key, self._read_controller)
+        data = await _shared.read(key, lambda: self._read_controller(key))
         return poll_result(data, str(self.config[CONF_AP_NAME]).strip())
 
+    def _version(self) -> str:
+        """The SNMP version; settings saved before it was a setting: v3 if a user is set."""
+        version = self.config.get("snmp_version")
+        if version in SNMP_VERSIONS:
+            return version
+        return "v3" if (self.config.get("username") or "").strip() else "v2c"
+
     def _auth(self, hlapi: Any) -> Any:
-        """v3 when a user is set, else v2c; rejects settings that are neither."""
-        user = (self.config.get("username") or "").strip()
-        if user:
+        """v2c or v3 credentials, as snmp_version says; rejects missing ones."""
+        if self._version() == "v3":
+            user = (self.config.get("username") or "").strip()
+            if not user:
+                raise AccessPointAuthError("SNMPv3 needs a user")
             auth_key = self.config.get("auth_key") or ""
             auth_protocol = self.config.get("auth_protocol") or "sha"
             priv_protocol = self.config.get("priv_protocol") or "aes"
@@ -225,9 +257,9 @@ class CiscoWlcSnmp(AccessPointDriver):
             )
         if community := self.config.get("community"):
             return hlapi.CommunityData(community, mpModel=1)
-        raise AccessPointAuthError("SNMP needs a community (v2c) or a user and keys (v3)")
+        raise AccessPointAuthError("SNMP v2c needs a community")
 
-    async def _read_controller(self) -> ControllerData:
+    async def _read_controller(self, key: tuple[str, ...]) -> ControllerData:
         import pysnmp.hlapi.v3arch.asyncio as hlapi
         from pysnmp.error import PySnmpError
 
@@ -242,19 +274,30 @@ class CiscoWlcSnmp(AccessPointDriver):
                 retries=SNMP_RETRIES,
             )
             context = hlapi.ContextData()
-            aps = {
-                key: await _walk(hlapi, engine, auth, target, context, column)
-                for key, column in AP_COLUMNS.items()
-            }
-            clients = {
-                key: await _walk(hlapi, engine, auth, target, context, column)
-                for key, column in CLIENT_COLUMNS.items()
-            }
+            columns = [*AP_COLUMNS.values(), *CLIENT_COLUMNS.values()]
+            # All at once: one engine tells concurrent requests apart by request ID.
+            # Every walk is let finish, failed or not, before the engine closes: closing
+            # with requests out makes their late answers fail inside pysnmp.
+            walked = await asyncio.gather(
+                *(_walk(hlapi, engine, auth, target, context, oid) for oid in columns),
+                return_exceptions=True,
+            )
         except (OSError, PySnmpError) as err:  # e.g. a host name that doesn't resolve
             raise AccessPointError(f"{host}: {err}") from err
         finally:
             engine.close_dispatcher()
-        return parse_columns(aps, clients)
+        if errors := [result for result in walked if isinstance(result, BaseException)]:
+            # Rejected keys first: they tell the user what to fix.
+            auth = [e for e in errors if isinstance(e, AccessPointAuthError)]
+            raise (auth or errors)[0]
+        values = dict(zip(columns, walked))
+        data = parse_columns(
+            {name: values[oid] for name, oid in AP_COLUMNS.items()},
+            {name: values[oid] for name, oid in CLIENT_COLUMNS.items()},
+            _previous.get(key),
+        )
+        _previous[key] = data
+        return data
 
 
 async def _walk(

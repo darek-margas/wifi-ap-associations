@@ -4,7 +4,7 @@ Usage:
     wifi-ap-probe --type dlink_dap_ssh --host 192.168.1.231 --username admin
     wifi-ap-probe --type cisco_wlc_ssh --host 192.168.1.20 --username ha --ap-name AP01
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
-    wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01         --username ro --auth-protocol sha256 --priv-protocol aes             # SNMP v3
+    wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01 --snmp-version v3 --username ro --auth-protocol sha256
     wifi-ap-probe --list-types
 
 Secrets are asked for interactively, or taken from the environment: the password and
@@ -47,6 +47,7 @@ def main() -> int:
     parser.add_argument("--port", type=int)
     parser.add_argument("--username")
     parser.add_argument("--ap-name", help="AP name on the controller (cisco_wlc_*)")
+    parser.add_argument("--snmp-version", help="v2c or v3 (default: v3 if --username)")
     parser.add_argument("--auth-protocol", help="SNMPv3 authentication, e.g. sha256")
     parser.add_argument("--priv-protocol", help="SNMPv3 privacy, e.g. aes")
     parser.add_argument("--list-types", action="store_true")
@@ -62,6 +63,8 @@ def main() -> int:
         parser.error("--host is required")
 
     driver_cls = DRIVERS[args.type]
+    if args.snmp_version is None and args.username:
+        args.snmp_version = "v3"  # an SNMP user means v3; ignored by non-SNMP drivers
     config: dict[str, object] = {}
     for field in driver_cls.FIELDS:  # before asking for any secret
         value = getattr(args, field.key, None)
@@ -70,7 +73,7 @@ def main() -> int:
     for field in driver_cls.FIELDS:
         value = getattr(args, field.key, None)
         if value is None and field.secret:
-            value = _secret(field.key, field.optional, snmp_v3=bool(args.username))
+            value = _secret(field.key, field.optional, snmp_v3=args.snmp_version == "v3")
         config[field.key] = value if value is not None else field.default
 
     try:
