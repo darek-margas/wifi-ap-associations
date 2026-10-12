@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 
 class AccessPointError(Exception):
@@ -72,6 +72,10 @@ class DriverField:
     key: str
     secret: bool = False
     default: str | int | None = None
+    optional: bool = False
+    """May be left empty, e.g. a community or a v3 user: the driver needs one of them."""
+    choices: tuple[str, ...] | None = None
+    """The only accepted values (shown as a list), e.g. SNMPv3 algorithm names."""
 
 
 class AccessPointDriver(ABC):
@@ -113,6 +117,11 @@ class AccessPointDriver(ABC):
     talking to the AP itself (e.g. "unifi": the UniFi Network integration). The
     integration then passes that source as the constructor's second argument and may
     offer UNIQUE_FIELD as a list of what the source knows. None for direct drivers."""
+
+    BLOCKING_IMPORTS: ClassVar[tuple[str, ...]] = ()
+    """Modules the driver imports on its first poll that load files from disk (e.g.
+    pysnmp). A program running an event loop, such as Home Assistant, imports them in
+    a worker thread before polling, so the loop isn't blocked."""
 
     def device_mac(self) -> str | None:
         """The AP's MAC, for finding the device another integration registered for it."""
@@ -158,6 +167,7 @@ def normalize_mac(mac: str) -> str:
 
 # Import the driver modules last so they can use the definitions above and register.
 from . import (  # noqa: E402, F401
+    cisco_wlc_snmp,
     cisco_wlc_ssh,
     dlink_dap_ssh,
     mikrotik_ssh,

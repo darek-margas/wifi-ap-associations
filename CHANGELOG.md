@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0
+
+- **New driver `cisco_wlc_snmp` (experimental): Cisco lightweight APs joined to a
+  Catalyst 9800 controller, read over SNMP** (v2c with a community, or v3 with a user,
+  keys and algorithms), for controllers without SSH access. One access point per Cisco
+  AP, by its name, as with `cisco_wlc_ssh`; APs of one controller polled together share
+  one read. Each read walks eight columns of the Airespace client and AP tables: the
+  client's AP, SSID, policy state (only Run counts) and protocol (the band), and the
+  AP's name, location, status and model. Built and tested from a C9800-CL SNMPv3 report;
+  no signal yet (it is in another table, added once a report confirms its columns).
+- The Cisco controller model is shared by both Cisco drivers (`cisco_wlc`), so they give
+  the same results; `poll_result` and `band_for_protocol` stay importable from
+  `cisco_wlc_ssh`.
+- `DriverField` gains `optional` (may be left empty) and `choices` (the only accepted
+  values); drivers gain `BLOCKING_IMPORTS`, modules to import off the event loop before
+  the first poll (pysnmp).
+- `wifi-ap-probe` reads SNMP settings: `--auth-protocol`, `--priv-protocol`, the
+  community from `$AP_COMMUNITY` and the v3 privacy key from `$AP_PRIV_KEY`, and only asks
+  for the secrets the chosen SNMP version needs.
+
 ## 0.6.1
 
 - **SNMP host types** for the collector: `--profile c9800` (Cisco Catalyst 9800) or

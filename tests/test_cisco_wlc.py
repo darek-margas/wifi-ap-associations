@@ -198,7 +198,7 @@ def fake_connect(monkeypatch: pytest.MonkeyPatch, sent: list[str]) -> list[dict]
         return Conn()
 
     monkeypatch.setattr(asyncssh, "connect", connect)
-    monkeypatch.setattr(cisco_wlc_ssh, "_shared", {})
+    monkeypatch.setattr(cisco_wlc_ssh, "_shared", cisco_wlc_ssh.SharedReads(cisco_wlc_ssh.SHARE_SECONDS))
     return connects
 
 
@@ -236,7 +236,7 @@ def test_rejected_login(monkeypatch: pytest.MonkeyPatch) -> None:
         raise asyncssh.PermissionDenied("no")
 
     monkeypatch.setattr(asyncssh, "connect", connect)
-    monkeypatch.setattr(cisco_wlc_ssh, "_shared", {})
+    monkeypatch.setattr(cisco_wlc_ssh, "_shared", cisco_wlc_ssh.SharedReads(cisco_wlc_ssh.SHARE_SECONDS))
     driver = CiscoWlcSsh({**CONFIG, "ap_name": "AP01"})
     with pytest.raises(AccessPointAuthError):
         asyncio.run(driver.async_poll())

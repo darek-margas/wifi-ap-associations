@@ -36,7 +36,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 import re
 import time
 from typing import Any
@@ -47,16 +46,23 @@ from . import (
     AccessPointAuthError,
     AccessPointDriver,
     AccessPointError,
-    AccessPointInfo,
     AssociatedClient,
     DriverField,
     PollResult,
     normalize_mac,
     register,
 )
+from .cisco_wlc import (  # noqa: F401  band_for_protocol and poll_result: public API
+    CONF_AP_NAME,
+    ControllerClient,
+    ControllerData,
+    JoinedAp,
+    SharedReads,
+    ap_location,
+    band_for_protocol,
+    poll_result,
+)
 from .ssh import SshPolicy
-
-CONF_AP_NAME = "ap_name"
 
 # IOS-XE 17 offers ECDH and group14/16 key exchange, RSA host keys and AES (CTR, GCM).
 CISCO_SSH_POLICY = SshPolicy(
@@ -109,41 +115,6 @@ _AP_ROW = re.compile(
     r"^(?P<name>\S+)\s+\d+\s+(?P<model>\S+)\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+"
     r"(?P<state>\S+)(?:\s+(?P<location>.*?))?\s*$"
 )
-_DEFAULT_LOCATION = "default location"
-STATE_REGISTERED = "Registered"
-STATE_RUN = "Run"
-
-
-@dataclass(frozen=True, slots=True)
-class JoinedAp:
-    """One row of `show ap summary`."""
-
-    name: str
-    model: str | None
-    state: str
-    location: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ControllerClient:
-    """One row of `show wireless client summary`."""
-
-    mac: str
-    ap_name: str
-    wlan_id: str | None
-    state: str
-    protocol: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ControllerData:
-    """What one read of a controller says about all of its APs."""
-
-    aps: dict[str, JoinedAp]
-    ssids: dict[str, str]
-    clients: list[ControllerClient]
-
-
 def table(output: str, first_column: str, columns: tuple[str, ...]) -> list[dict[str, str]]:
     """Rows of a fixed-width IOS table as dicts, sliced at the header's column positions.
 
@@ -188,31 +159,16 @@ def _column_starts(header: str, names: tuple[str, ...]) -> list[int] | None:
     return starts
 
 
-def band_for_protocol(protocol: str | None) -> str | None:
-    """11n(2.4) / 11ax(2.4) / 11g / 11b as 2.4GHz, 11ac / 11a / 11ax(5) as 5GHz, (6) as 6GHz."""
-    if not protocol:
-        return None
-    protocol = protocol.lower()
-    if match := re.search(r"\(([\d.]+)\)", protocol):
-        return {"2.4": "2.4GHz", "5": "5GHz", "6": "6GHz"}.get(match.group(1))
-    if protocol in {"11b", "11g"}:
-        return "2.4GHz"
-    if protocol in {"11a", "11ac"}:
-        return "5GHz"
-    return None
-
-
 def parse_aps(output: str) -> dict[str, JoinedAp]:
     """`show ap summary` as AP name -> JoinedAp."""
     aps = {}
     for row in table(output, "AP Name", ()):
         if match := _AP_ROW.match(row["AP Name"]):
-            location = (match.group("location") or "").strip()
             aps[match.group("name")] = JoinedAp(
                 name=match.group("name"),
                 model=match.group("model"),
                 state=match.group("state"),
-                location=None if location.lower() in {"", _DEFAULT_LOCATION} else location,
+                location=ap_location(match.group("location")),
             )
     if "AP Name" in output and not aps and not re.search(r"Number of APs:\s*0\b", output):
         raise AccessPointError("Could not read the controller's AP list")
@@ -279,31 +235,7 @@ def parse_controller(outputs: dict[str, str]) -> ControllerData:
     )
 
 
-def poll_result(data: ControllerData, ap_name: str) -> PollResult:
-    """One AP's associated clients and details from a controller read.
-
-    An AP the controller doesn't list, or that isn't Registered, raises: its clients
-    can't be known, which is different from "nobody is connected".
-    """
-    ap = data.aps.get(ap_name)
-    if ap is None:
-        raise AccessPointError(f"AP {ap_name!r} is not joined to the controller")
-    if ap.state != STATE_REGISTERED:
-        raise AccessPointError(f"AP {ap_name!r} is {ap.state}")
-    clients = [
-        AssociatedClient(
-            mac=client.mac,
-            ssid=data.ssids.get(client.wlan_id or ""),
-            band=band_for_protocol(client.protocol),
-        )
-        for client in data.clients
-        if client.ap_name == ap_name and client.state == STATE_RUN
-    ]
-    return PollResult(clients, AccessPointInfo(name=ap.name, location=ap.location, model=ap.model))
-
-
-# Controller reads in progress or just finished, shared by the APs of one controller.
-_shared: dict[tuple[str, int, str, str], tuple[float, asyncio.Task[ControllerData]]] = {}
+_shared = SharedReads(SHARE_SECONDS)
 
 
 @register
@@ -344,17 +276,7 @@ class CiscoWlcSsh(AccessPointDriver):
             str(self.config["username"]),
             str(self.config["password"]),
         )
-        loop = asyncio.get_running_loop()
-        entry = _shared.get(key)
-        if (
-            entry is None
-            or entry[1].get_loop() is not loop
-            or (entry[1].done() and time.monotonic() - entry[0] > SHARE_SECONDS)
-        ):
-            entry = (time.monotonic(), loop.create_task(self._read_controller()))
-            _shared[key] = entry
-        # Shielded: one AP's poll timing out must not cancel the read the others wait for.
-        return await asyncio.shield(entry[1])
+        return await _shared.read(key, self._read_controller)
 
     async def _read_controller(self) -> ControllerData:
         async with self._console() as process:

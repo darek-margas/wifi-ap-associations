@@ -3,9 +3,13 @@
 Usage:
     wifi-ap-probe --type dlink_dap_ssh --host 192.168.1.231 --username admin
     wifi-ap-probe --type cisco_wlc_ssh --host 192.168.1.20 --username ha --ap-name AP01
+    wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
+    wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01         --username ro --auth-protocol sha256 --priv-protocol aes             # SNMP v3
     wifi-ap-probe --list-types
 
-The password is asked for interactively (or taken from $AP_PASSWORD).
+Secrets are asked for interactively, or taken from the environment: the password and
+an SNMPv3 authentication key from $AP_PASSWORD, an SNMP community from $AP_COMMUNITY,
+an SNMPv3 privacy key from $AP_PRIV_KEY (empty: same as the authentication key).
 Installed with the library as the command "wifi-ap-probe" (or python -m wifi_ap_associations.probe).
 """
 
@@ -20,13 +24,31 @@ import sys
 from wifi_ap_associations import DRIVERS, AccessPointError
 
 
+# Where each secret comes from, and whether an optional one is needed: an SNMP
+# community only without a v3 user, the v3 keys only with one.
+_SECRET_ENV = {"community": "AP_COMMUNITY", "priv_key": "AP_PRIV_KEY"}
+_V3_ONLY = {"auth_key", "priv_key"}
+
+
+def _secret(key: str, optional: bool, snmp_v3: bool) -> str | None:
+    if optional and (key in _V3_ONLY) != snmp_v3:
+        return None
+    if value := os.environ.get(_SECRET_ENV.get(key, "AP_PASSWORD")):
+        return value
+    hint = " (empty = same as the authentication key)" if key == "priv_key" else ""
+    value = getpass.getpass(f"{key}{hint}: ")
+    return value or None if optional else value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--type", default="dlink_dap_ssh", help="driver type")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--username")
-    parser.add_argument("--ap-name", help="AP name on the controller (cisco_wlc_ssh)")
+    parser.add_argument("--ap-name", help="AP name on the controller (cisco_wlc_*)")
+    parser.add_argument("--auth-protocol", help="SNMPv3 authentication, e.g. sha256")
+    parser.add_argument("--priv-protocol", help="SNMPv3 privacy, e.g. aes")
     parser.add_argument("--list-types", action="store_true")
     args = parser.parse_args()
 
@@ -41,10 +63,14 @@ def main() -> int:
 
     driver_cls = DRIVERS[args.type]
     config: dict[str, object] = {}
+    for field in driver_cls.FIELDS:  # before asking for any secret
+        value = getattr(args, field.key, None)
+        if value is not None and field.choices and value not in field.choices:
+            parser.error(f"--{field.key.replace('_', '-')}: one of {', '.join(field.choices)}")
     for field in driver_cls.FIELDS:
         value = getattr(args, field.key, None)
         if value is None and field.secret:
-            value = os.environ.get("AP_PASSWORD") or getpass.getpass(f"{field.key}: ")
+            value = _secret(field.key, field.optional, snmp_v3=bool(args.username))
         config[field.key] = value if value is not None else field.default
 
     try:

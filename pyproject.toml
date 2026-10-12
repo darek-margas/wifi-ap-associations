@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "wifi-ap-associations"
 dynamic = ["version"]
-description = "Read which Wi-Fi clients are associated to an access point (D-Link DAP, OpenWrt, UniFi, MikroTik, Cisco 9800), with signal, band and the AP's own health."
+description = "Read which Wi-Fi clients are associated to an access point (D-Link DAP, OpenWrt, UniFi, MikroTik, Cisco 9800 over SSH or SNMP), with signal, band and the AP's own health."
 readme = "README.md"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
