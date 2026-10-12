@@ -21,7 +21,7 @@ inventory, an exporter for Prometheus, your own scripts.
 | `dlink_dap_ssh` | D-Link DAP (e.g. DAP-2610) | SSH console | `%` |
 | `openwrt_ssh` | OpenWrt 22.03 and newer | SSH, `ubus` (hostapd) | `dBm` |
 | `mikrotik_ssh` | MikroTik RouterOS (APs, routers with Wi-Fi, CAPsMAN), **experimental** | SSH exec, `print terse` of the `wifi` or `wireless` registration table | `dBm` |
-| `cisco_wlc_ssh` | Cisco lightweight APs (9120, 9130, ...) joined to a Catalyst 9800 controller, **experimental** | SSH console of the controller, `show wireless client summary`; one entry per AP, by AP name | none yet |
+| `cisco_wlc_ssh` | Cisco lightweight APs (9120, 9130, ...) joined to a Catalyst 9800 controller, **experimental** | SSH console of the controller, `show wireless client summary`, plus up to 15 clients' detail per read in turns (signal, connected time); one entry per AP, by AP name | `dBm` |
 | `cisco_wlc_snmp` | The same APs, for controllers read over SNMP (v2c or v3) instead of SSH, **experimental** | SNMP: the Airespace client and AP tables the 9800 serves; one entry per AP, by AP name | none yet |
 | `unifi_network` | UniFi | through a UniFi Network controller connection you pass in (see below) | `dBm` |
 

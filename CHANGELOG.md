@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+- **`cisco_wlc_ssh` reads signal and connected time.** They are only in each client's
+  own detail (`show wireless client mac-address <mac> detail`), so each read asks for a
+  few clients, in turns: up to 15 per read and 10 s, clients without a reading first,
+  then clients that moved to another AP, then the oldest readings. A reading under 2
+  minutes old isn't asked again, so once everyone has one only the oldest few are read
+  each poll; with 23 clients, everyone is refreshed about every 2 minutes.
+- A reading counts only while the client stays on the AP it was read on and for 10
+  minutes; its connected time is carried forward. A detail that fails or times out is
+  skipped and presence still comes from the summary. If the controller refuses the
+  command (e.g. a user without the privilege), details are paused for an hour.
+- `AssociatedClient.connected_seconds` for both Cisco drivers (SNMP: none yet).
+- Built and tested on the C9800-CL detail output from
+  [wifi-association-presence#10](https://github.com/darek-margas/wifi-association-presence/issues/10).
+
 ## 0.7.2
 
 Follow-ups from the second review of the Cisco drivers.

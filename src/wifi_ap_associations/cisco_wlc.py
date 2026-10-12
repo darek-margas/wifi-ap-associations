@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Hashable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 import time
 
@@ -47,6 +47,18 @@ class ControllerClient:
     band: str | None = None
     """Band when the controller gives it directly; otherwise from protocol."""
     signal: int | None = None
+    connected_seconds: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ClientReading:
+    """One client's signal and connection time, read on one AP at one moment."""
+
+    ap_name: str
+    signal: int | None
+    connected_seconds: int | None
+    read_at: float
+    """time.monotonic() of the read."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +68,11 @@ class ControllerData:
     aps: dict[str, JoinedAp]
     ssids: dict[str, str]
     clients: list[ControllerClient]
+    readings: dict[str, ClientReading] = field(default_factory=dict)
+    """Per-client readings gathered over several reads (drivers that read details in
+    turns), carried from one read to the next."""
+    details_paused_until: float = 0.0
+    """time.monotonic() until which per-client details aren't asked for (refused)."""
 
 
 def ap_location(text: str | None) -> str | None:
@@ -95,6 +112,7 @@ def poll_result(data: ControllerData, ap_name: str) -> PollResult:
             ssid=client.ssid or data.ssids.get(client.wlan_id or ""),
             band=client.band or band_for_protocol(client.protocol),
             signal=client.signal,
+            connected_seconds=client.connected_seconds,
         )
         for client in data.clients
         if client.ap_name == ap_name and client.state == STATE_RUN

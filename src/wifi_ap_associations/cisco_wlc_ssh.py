@@ -26,8 +26,24 @@ Seen on a C9800-CL with IOS-XE 17.15.5 (interactive console, `terminal length 0`
 
 Only clients in the Run state count as associated (the others are still joining:
 Associated, Authenticating, IP Learn, Webauth Pending). The band comes from the protocol
-column. These tables have no signal or connected time; `show wireless client summary
-detail` has the connected time, but in a much wider layout that isn't used yet.
+column.
+
+Signal and connected time are only in each client's own detail, about 170 lines:
+
+    show wireless client mac-address 4e62.3300.0009 detail
+    Client MAC Address : 4e62.3300.0009
+    AP Name: AP01
+    Connected For : 36651 seconds
+      Radio Signal Strength Indicator : -61 dBm
+      Signal to Noise Ratio : 35 dB
+
+Asking for every client every minute would load the controller, so each read asks for
+a few, in turns (see pick_details): clients without a reading first, then those that
+moved to another AP, then the oldest readings; a reading under REFRESH_SECONDS old is
+kept. A reading counts only while the client stays on the AP it was read on, and for
+SIGNAL_MAX_AGE; its connected time is carried forward. A detail that fails is skipped:
+presence comes from the summary alone. A controller that refuses the command (e.g. a
+user without the privilege) isn't asked again for DETAILS_PAUSE.
 EXPERIMENTAL until a tester confirms it on a real controller.
 """
 
@@ -36,6 +52,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 import re
 import time
 from typing import Any
@@ -54,6 +71,8 @@ from . import (
 )
 from .cisco_wlc import (  # noqa: F401  band_for_protocol and poll_result: public API
     CONF_AP_NAME,
+    STATE_RUN,
+    ClientReading,
     ControllerClient,
     ControllerData,
     JoinedAp,
@@ -101,6 +120,23 @@ COMMANDS = {
     "wlans": "show wlan summary",
     "clients": "show wireless client summary",
 }
+DETAIL_COMMAND = "show wireless client mac-address {mac} detail"
+DETAILS_PER_READ = 15  # at most this many client details per read
+DETAILS_BUDGET = 10  # seconds of a read spent on details, at most
+DETAIL_TIMEOUT = 5  # seconds for one detail's answer
+REFRESH_SECONDS = 120  # a reading this young isn't read again
+SIGNAL_MAX_AGE = 600  # a reading older than this isn't shown
+DETAILS_PAUSE = 3600  # after the controller refused the detail command
+
+_DETAIL_FIELDS = {
+    "mac": re.compile(r"^\s*Client MAC Address\s*:\s*(\S+)", re.MULTILINE),
+    "ap": re.compile(r"^\s*AP Name\s*:\s*(\S+)", re.MULTILINE),
+    # The first one is the client's total; per-band copies follow.
+    "signal": re.compile(r"^\s*Radio Signal Strength Indicator\s*:\s*(-?\d+)\s*dBm", re.MULTILINE),
+    "connected": re.compile(r"^\s*Connected For\s*:\s*(\d+)\s*seconds", re.MULTILINE),
+}
+# Answers meaning the user may not run the command at all (not "no such client").
+_REFUSED = re.compile(r"^\s*% (Invalid input|Authorization failed)", re.MULTILINE)
 
 # "C9800#" or "C9800>" alone on the last line.
 _PROMPT = re.compile(r"(?:^|\n)[\w.\-]+[#>]\s*$")
@@ -235,6 +271,96 @@ def parse_controller(outputs: dict[str, str]) -> ControllerData:
     )
 
 
+def cisco_mac(mac: str) -> str:
+    """AA:BB:CC:DD:EE:FF as IOS writes it: aabb.ccdd.eeff."""
+    digits = normalize_mac(mac).replace(":", "").lower()
+    return f"{digits[0:4]}.{digits[4:8]}.{digits[8:12]}"
+
+
+def parse_client_detail(output: str, now: float) -> tuple[str, ClientReading] | None:
+    """MAC and reading from `show wireless client mac-address ... detail`, or None.
+
+    None when the answer isn't a client's detail (no client MAC or AP), e.g. the client
+    left between the summary and this command.
+    """
+    found = {key: pattern.search(output) for key, pattern in _DETAIL_FIELDS.items()}
+    if not (found["mac"] and found["ap"]):
+        return None
+    try:
+        mac = normalize_mac(found["mac"].group(1))
+    except ValueError:
+        return None
+    signal = int(found["signal"].group(1)) if found["signal"] else None
+    if signal is not None and not -120 <= signal <= 0:
+        signal = None
+    connected = int(found["connected"].group(1)) if found["connected"] else None
+    return mac, ClientReading(
+        ap_name=found["ap"].group(1), signal=signal, connected_seconds=connected, read_at=now
+    )
+
+
+def pick_details(
+    clients: list[ControllerClient], readings: dict[str, ClientReading], now: float
+) -> list[str]:
+    """MACs whose detail to read now, most needed first, at most DETAILS_PER_READ.
+
+    Clients without a reading first, then those that moved to another AP since theirs
+    (its signal belongs to the old AP), then the oldest readings. Readings younger than
+    REFRESH_SECONDS on the same AP are kept as they are.
+    """
+    due = []
+    for client in clients:
+        if client.state != STATE_RUN:
+            continue
+        reading = readings.get(client.mac)
+        if reading is None:
+            rank = (0, 0.0)
+        elif reading.ap_name != client.ap_name:
+            rank = (1, reading.read_at)
+        elif now - reading.read_at >= REFRESH_SECONDS:
+            rank = (2, reading.read_at)
+        else:
+            continue
+        due.append((rank, client.mac))
+    return [mac for _rank, mac in sorted(due)][:DETAILS_PER_READ]
+
+
+def with_readings(
+    data: ControllerData,
+    readings: dict[str, ClientReading],
+    paused_until: float,
+    now: float,
+) -> ControllerData:
+    """The read with each client's signal and connected time, where a reading applies.
+
+    A reading applies while the client is on the AP it was read on and the reading is
+    under SIGNAL_MAX_AGE; the connected time grows by the reading's age. Readings of
+    clients no longer listed, or too old, are dropped.
+    """
+    listed = {client.mac for client in data.clients}
+    kept = {
+        mac: reading
+        for mac, reading in readings.items()
+        if mac in listed and now - reading.read_at <= SIGNAL_MAX_AGE
+    }
+    clients = []
+    for client in data.clients:
+        reading = kept.get(client.mac)
+        if reading is not None and reading.ap_name == client.ap_name:
+            age = int(now - reading.read_at)
+            client = replace(
+                client,
+                signal=reading.signal,
+                connected_seconds=(
+                    reading.connected_seconds + age
+                    if reading.connected_seconds is not None
+                    else None
+                ),
+            )
+        clients.append(client)
+    return replace(data, clients=clients, readings=kept, details_paused_until=paused_until)
+
+
 _shared = SharedReads(SHARE_SECONDS)
 
 
@@ -245,7 +371,7 @@ class CiscoWlcSsh(AccessPointDriver):
     TYPE = "cisco_wlc_ssh"
     NAME = "Cisco Catalyst 9800 controller (SSH)"
     MANUFACTURER = "Cisco"
-    # No signal in the tables read; dBm is what the controller's detail commands report.
+    # From each client's detail, read in turns (see pick_details).
     SIGNAL_UNIT = "dBm"
     EXPERIMENTAL = True
     REPORTS = frozenset({"name", "location", "model"})
@@ -277,13 +403,19 @@ class CiscoWlcSsh(AccessPointDriver):
             str(self.config["username"]),
             str(self.config["password"]),
         )
-        return await _shared.read(key, self._read_controller)
+        return await _shared.read(key, lambda: self._read_controller(key))
 
-    async def _read_controller(self) -> ControllerData:
+    async def _read_controller(self, key: tuple[Any, ...]) -> ControllerData:
+        previous = _shared.last(key)
+        readings = dict(previous.readings) if previous else {}
+        paused_until = previous.details_paused_until if previous else 0.0
         async with self._console() as process:
             await _run(process, "terminal length 0")
             outputs = {key: await _run(process, command) for key, command in COMMANDS.items()}
-        return parse_controller(outputs)
+            data = parse_controller(outputs)
+            if time.monotonic() >= paused_until:
+                paused_until = await _read_details(process, data, readings)
+        return with_readings(data, readings, paused_until, time.monotonic())
 
     @asynccontextmanager
     async def _console(self) -> AsyncIterator[asyncssh.SSHClientProcess]:
@@ -311,20 +443,45 @@ class CiscoWlcSsh(AccessPointDriver):
             raise AccessPointError(f"{host}: {err!r}") from err
 
 
-async def _run(process: Any, command: str) -> str:
+async def _read_details(
+    process: Any, data: ControllerData, readings: dict[str, ClientReading]
+) -> float:
+    """Read some clients' details into readings; return until when to pause details.
+
+    Never raises for a detail: a slow or odd answer ends this read's details (the
+    console's state is then unknown), and presence comes from the summary anyway.
+    """
+    started = time.monotonic()
+    for mac in pick_details(data.clients, readings, started):
+        if time.monotonic() - started > DETAILS_BUDGET:
+            break
+        try:
+            output = await _run(
+                process, DETAIL_COMMAND.format(mac=cisco_mac(mac)), timeout=DETAIL_TIMEOUT
+            )
+        except (AccessPointError, TimeoutError):
+            break
+        if _REFUSED.search(output):
+            return time.monotonic() + DETAILS_PAUSE
+        if (parsed := parse_client_detail(output, time.monotonic())) and parsed[0] == mac:
+            readings[mac] = parsed[1]
+    return 0.0
+
+
+async def _run(process: Any, command: str, timeout: float = COMMAND_TIMEOUT) -> str:
     """Send a console command and return its output up to the next prompt."""
     process.stdin.write(command + "\n")
-    return await _read_until_prompt(process)
+    return await _read_until_prompt(process, timeout)
 
 
-async def _read_until_prompt(process: Any) -> str:
+async def _read_until_prompt(process: Any, timeout: float = COMMAND_TIMEOUT) -> str:
     """Read console output until the prompt, paging past --More-- if paging is still on."""
-    deadline = time.monotonic() + COMMAND_TIMEOUT
+    deadline = time.monotonic() + timeout
     buffer = ""
     while not _PROMPT.search(buffer):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise AccessPointError(f"no CLI prompt within {COMMAND_TIMEOUT}s")
+            raise AccessPointError(f"no CLI prompt within {timeout:g}s")
         chunk = await asyncio.wait_for(process.stdout.read(4096), remaining)
         if not chunk:
             raise AccessPointError("console closed the connection")
