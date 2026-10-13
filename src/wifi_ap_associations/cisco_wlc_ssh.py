@@ -46,7 +46,17 @@ back between two polls keeps showing the earlier, longer connected time until it
 reading (one missing from a read loses its reading). A detail that fails is skipped:
 presence comes from the summary alone. A controller that refuses the command (e.g. a
 user without the privilege) isn't asked again for DETAILS_PAUSE.
-EXPERIMENTAL until a tester confirms it on a real controller.
+Confirmed on a C9800-CL (IOS-XE 17.15.5, two C9120AXI APs) in Home Assistant: every
+client, AP and band matched `show wireless client summary`, with signal and connected
+time. Privilege 1 is enough for the summaries; the detail needs privilege 15, or a
+parser view that allows exactly these commands, which the tester ran:
+
+    parser view HA_PRESENCE
+     commands exec include all show wireless client mac-address
+     commands exec include show wireless client summary
+     commands exec include terminal length
+     commands exec include show ap summary
+     commands exec include show wlan summary
 """
 
 from __future__ import annotations
@@ -382,7 +392,6 @@ class CiscoWlcSsh(AccessPointDriver):
     MANUFACTURER = "Cisco"
     # From each client's detail, read in turns (see pick_details).
     SIGNAL_UNIT = "dBm"
-    EXPERIMENTAL = True
     REPORTS = frozenset({"name", "location", "model"})
     # Many APs share one controller host; the AP name tells them apart.
     UNIQUE_FIELD = CONF_AP_NAME

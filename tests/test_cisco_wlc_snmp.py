@@ -20,14 +20,17 @@ from wifi_ap_associations.cisco_wlc import SharedReads, poll_result
 from wifi_ap_associations.cisco_wlc_snmp import (
     AP_COLUMNS,
     CLIENT_COLUMNS,
+    EXTRA_COLUMNS,
     CiscoWlcSnmp,
     parse_columns,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cisco-c9800-cl-17.15.5-snmp.txt"
+# The same controller a day later, with the signal and connected-time columns.
+SIGNAL_FIXTURE = Path(__file__).parent / "fixtures" / "cisco-c9800-cl-17.15.5-snmp-signal.txt"
 COLUMN_KEYS = {
     **{oid: ("aps", key) for key, oid in AP_COLUMNS.items()},
-    **{oid: ("clients", key) for key, oid in CLIENT_COLUMNS.items()},
+    **{oid: ("clients", key) for key, oid in {**CLIENT_COLUMNS, **EXTRA_COLUMNS}.items()},
 }
 
 
@@ -40,10 +43,10 @@ def _value(text: str):
     return int(value)
 
 
-def fixture_rows() -> list[tuple[str, str, object]]:
-    """(column OID, row MAC, value) for every value line of the fixture."""
+def fixture_rows(path: Path = FIXTURE) -> list[tuple[str, str, object]]:
+    """(column OID, row MAC, value) for every value line of a fixture."""
     rows = []
-    for line in FIXTURE.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("#") or not line.strip():
             continue
         oid, value = line.split(" = ", 1)
@@ -52,9 +55,9 @@ def fixture_rows() -> list[tuple[str, str, object]]:
     return rows
 
 
-def fixture_columns() -> tuple[dict, dict]:
+def fixture_columns(path: Path = FIXTURE) -> tuple[dict, dict]:
     tables: dict[str, dict] = {"aps": {}, "clients": {}}
-    for column, mac, value in fixture_rows():
+    for column, mac, value in fixture_rows(path):
         table, key = COLUMN_KEYS[column]
         tables[table].setdefault(key, {})[mac] = value
     return tables["aps"], tables["clients"]
@@ -231,7 +234,9 @@ def test_aps_polled_together_share_one_read(monkeypatch: pytest.MonkeyPatch) -> 
     ap01, ap02 = asyncio.run(poll_both())
     assert (len(ap01.clients), len(ap02.clients)) == (16, 7)
     assert agent.engines == 1 and agent.closed == 1
-    assert sorted(agent.walks) == sorted([*AP_COLUMNS.values(), *CLIENT_COLUMNS.values()])
+    assert sorted(agent.walks) == sorted(
+        [*AP_COLUMNS.values(), *CLIENT_COLUMNS.values(), *EXTRA_COLUMNS.values()]
+    )
 
 
 @pytest.mark.parametrize(
@@ -370,11 +375,11 @@ def test_concurrent_polls_share_a_failure() -> None:
 # --- end to end: the real pysnmp against a local agent serving the fixture ----------
 
 
-def _agent_rows():
+def _agent_rows(path: Path = FIXTURE):
     from pysnmp.proto.api import v2c
 
     rows = []
-    for column, mac, value in fixture_rows():
+    for column, mac, value in fixture_rows(path):
         index = tuple(int(part, 16) for part in mac.split(":"))
         oid = tuple(int(part) for part in column.split(".")) + index
         snmp_value = v2c.OctetString(value) if isinstance(value, bytes) else v2c.Integer(value)
@@ -382,7 +387,7 @@ def _agent_rows():
     return sorted(rows)
 
 
-async def _local_agent():
+async def _local_agent(path: Path = FIXTURE):
     """An SNMP agent on 127.0.0.1 answering GET/GETNEXT/GETBULK from the fixture.
 
     v2c community "public"; v3 user "ro" with SHA-256 "authsecret1" and AES "privsecret1".
@@ -394,7 +399,7 @@ async def _local_agent():
     from pysnmp.proto.api import v2c
     from pysnmp.smi import instrum
 
-    data = _agent_rows()
+    data = _agent_rows(path)
 
     class Table(instrum.AbstractMibInstrumController):
         def read_variables(self, *var_binds, **ctx):
@@ -559,3 +564,76 @@ def test_failed_read_leaves_the_last_good_one() -> None:
         return shared.last("c")
 
     assert asyncio.run(main()) == _data()
+
+
+# --- signal and connected time (bsnMobileStationStatsTable, cldcClientTable) ---------
+
+AP01_RADIO, AP02_RADIO = "02:00:00:00:02:25", "02:00:00:00:02:24"
+
+
+def test_signal_and_connected_time_of_the_real_controller() -> None:
+    data = parse_columns(*fixture_columns(SIGNAL_FIXTURE))
+    ap01, ap02 = poll_result(data, "AP01"), poll_result(data, "AP02")
+    assert (len(ap01.clients), len(ap02.clients)) == (15, 8)  # as the reporter saw
+    clients = {c.mac: c for c in [*ap01.clients, *ap02.clients]}
+    # Every client has both, every read: no turns as over SSH.
+    assert all(-90 <= c.signal <= -30 for c in clients.values())
+    assert all(c.connected_seconds and c.connected_seconds > 0 for c in clients.values())
+    # CLIENT_18 in the report: -64 dBm, connected 7559 s (8354 s 13 min 14 s later).
+    assert (clients["02:00:00:00:00:12"].signal, clients["02:00:00:00:00:12"].connected_seconds) == (-64, 7559)
+
+
+def test_extra_tables_never_add_clients() -> None:
+    """Rows only in the signal or connected-time tables aren't wireless clients."""
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    stranger = "02:00:00:00:09:99"
+    clients["signal"][stranger] = -50
+    clients["connected"][stranger] = 100
+    data = parse_columns(aps, clients)
+    assert stranger not in {c.mac for c in data.clients}
+    # Nor do they keep a departed client: gone from the client table, gone.
+    gone = "02:00:00:00:00:12"
+    previous = data
+    for key in CLIENT_COLUMNS:
+        clients[key].pop(gone, None)
+    assert gone not in {c.mac for c in parse_columns(aps, clients, previous).clients}
+
+
+def test_out_of_range_signal_is_dropped() -> None:
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    clients["signal"]["02:00:00:00:00:12"] = 17
+    client = next(c for c in parse_columns(aps, clients).clients if c.mac == "02:00:00:00:00:12")
+    assert client.signal is None
+
+
+def test_missing_signal_keeps_the_previous_one_only_on_the_same_ap() -> None:
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    previous = parse_columns(aps, clients)
+    mac = "02:00:00:00:00:12"
+    del clients["signal"][mac]
+    same = next(c for c in parse_columns(aps, clients, previous).clients if c.mac == mac)
+    assert same.signal == -64
+    # Roamed to the other AP meanwhile: the old AP's signal doesn't apply.
+    other = AP02_RADIO if clients["ap"][mac] == bytes.fromhex(AP01_RADIO.replace(":", "")) else AP01_RADIO
+    clients["ap"][mac] = bytes.fromhex(other.replace(":", ""))
+    moved = next(c for c in parse_columns(aps, clients, previous).clients if c.mac == mac)
+    assert moved.signal is None
+
+
+def test_real_pysnmp_reads_signal_from_a_local_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cisco_wlc_snmp, "_shared", cisco_wlc_snmp.SharedReads(20))
+
+    async def main():
+        agent, port = await _local_agent(SIGNAL_FIXTURE)
+        try:
+            config = {"host": "127.0.0.1", "port": port, **V3}
+            return await asyncio.gather(
+                CiscoWlcSnmp({**config, "ap_name": "AP01"}).async_poll(),
+                CiscoWlcSnmp({**config, "ap_name": "AP02"}).async_poll(),
+            )
+        finally:
+            agent.close_dispatcher()
+
+    ap01, ap02 = asyncio.run(main())
+    assert (len(ap01.clients), len(ap02.clients)) == (15, 8)
+    assert all(c.signal is not None and c.connected_seconds for c in [*ap01.clients, *ap02.clients])

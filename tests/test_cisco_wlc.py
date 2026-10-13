@@ -46,9 +46,9 @@ OUTPUTS = sections(FIXTURE)
 CONFIG = {"host": "192.0.2.20", "port": 22, "username": "ha", "password": "x"}
 
 
-def test_registered_as_experimental() -> None:
+def test_registered_and_confirmed() -> None:
     assert DRIVERS["cisco_wlc_ssh"] is CiscoWlcSsh
-    assert CiscoWlcSsh.EXPERIMENTAL is True
+    assert CiscoWlcSsh.EXPERIMENTAL is False  # confirmed on a real 9800 in issue #10
     assert CiscoWlcSsh.UNIQUE_FIELD == "ap_name"
     assert [f.key for f in CiscoWlcSsh.FIELDS] == ["host", "port", "username", "password", "ap_name"]
 

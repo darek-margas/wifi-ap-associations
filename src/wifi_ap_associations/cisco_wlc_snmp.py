@@ -2,8 +2,8 @@
 
 For controllers that can be read over SNMP but not over SSH. As with the SSH driver,
 one access point is one AP joined to the controller, and the APs of a controller polled
-together share one read. Each read walks eight columns of the Airespace wireless MIB,
-which the 9800 serves (confirmed on a C9800-CL with IOS-XE 17.15.5):
+together share one read. Each read walks ten columns, eight of the Airespace wireless MIB and one of
+Cisco's client MIB, which the 9800 serves (confirmed on a C9800-CL with IOS-XE 17.15.5):
 
     bsnMobileStationTable 1.3.6.1.4.1.14179.2.1.4.1, one row per client, indexed by its MAC:
       .4  AP MAC            the AP's base radio MAC, the index of bsnAPTable
@@ -12,13 +12,18 @@ which the 9800 serves (confirmed on a C9800-CL with IOS-XE 17.15.5):
       .25 protocol          an enumeration, see PROTOCOL_BANDS
     bsnAPTable 1.3.6.1.4.1.14179.2.2.1.1, one row per AP, indexed by its base radio MAC:
       .3  name    .4 location    .6 operation status (1 = associated)    .16 model
+    bsnMobileStationStatsTable 1.3.6.1.4.1.14179.2.1.6.1, per client:
+      .1  RSSI in dBm
+    cldcClientTable 1.3.6.1.4.1.9.9.599.1.3.1.1, per client:
+      .15 seconds since the client (re)associated; in two reports 13 min 14 s apart it
+          had grown by 795 for every client. (.14 holds when, but on a clock a day off.)
 
-That is everything presence needs; per-client signal is in another table
-(bsnMobileStationStatsTable) and is added once a report confirms its columns. Until
-then signal is unknown. SNMP v2c with a community, or v3 with a user and keys, as the
-snmp_version setting says.
+Signal and connected time come for every client on every read. Which clients exist is
+decided by the client table alone: the other two tables also hold rows for devices
+that aren't wireless clients, and those are ignored. SNMP v2c with a community, or v3
+with a user and keys, as the snmp_version setting says.
 
-The eight columns are walked at the same time, so a read takes about as long as its
+The columns are walked at the same time, so a read takes about as long as its
 slowest column and the columns describe nearly the same moment. A client that joins,
 roams or leaves during a read can still be missing from some of them; such a client
 keeps what the previous read said about it (see parse_columns) rather than vanishing.
@@ -59,6 +64,11 @@ CLIENT_COLUMNS = {
     "ssid": f"{CLIENT_TABLE}.7",
     "state": f"{CLIENT_TABLE}.23",
     "protocol": f"{CLIENT_TABLE}.25",
+}
+# Per-client extras from other tables; they never decide which clients exist.
+EXTRA_COLUMNS = {
+    "signal": "1.3.6.1.4.1.14179.2.1.6.1.1",
+    "connected": "1.3.6.1.4.1.9.9.599.1.3.1.1.15",
 }
 AP_COLUMNS = {
     "name": f"{AP_TABLE}.3",
@@ -143,7 +153,8 @@ def parse_columns(
         name_by_mac[ap_mac] = name
     known = {client.mac: client for client in previous.clients} if previous else {}
     found = []
-    for mac in sorted({mac for column in clients.values() for mac in column}):
+    listed = {mac for key in CLIENT_COLUMNS for mac in clients.get(key, {})}
+    for mac in sorted(listed):
         ap_name = name_by_mac.get(_mac(clients.get("ap", {}).get(mac)) or "")
         state = _text(clients.get("state", {}).get(mac))
         before = known.get(mac)
@@ -154,6 +165,13 @@ def parse_columns(
             state = state or before.state
         ssid = _text(clients.get("ssid", {}).get(mac))
         band = PROTOCOL_BANDS.get(_int(clients.get("protocol", {}).get(mac)) or 0)
+        signal = _int(clients.get("signal", {}).get(mac))
+        if signal is not None and not -120 <= signal <= 0:
+            signal = None
+        connected = _int(clients.get("connected", {}).get(mac))
+        if connected is not None and connected < 0:
+            connected = None
+        same_ap = before is not None and before.ap_name == ap_name
         found.append(
             ControllerClient(
                 mac=mac,
@@ -163,6 +181,13 @@ def parse_columns(
                 protocol=None,
                 ssid=ssid or (before.ssid if before else None),
                 band=band or (before.band if before else None),
+                # A missing reading falls back only to one taken on the same AP.
+                signal=signal if signal is not None else (before.signal if same_ap else None),
+                connected_seconds=(
+                    connected
+                    if connected is not None
+                    else (before.connected_seconds if same_ap else None)
+                ),
             )
         )
     return ControllerData(aps=joined, ssids={}, clients=found)
@@ -191,7 +216,6 @@ class CiscoWlcSnmp(AccessPointDriver):
     TYPE = "cisco_wlc_snmp"
     NAME = "Cisco Catalyst 9800 controller (SNMP)"
     MANUFACTURER = "Cisco"
-    # No signal read yet; the controller reports it in dBm.
     SIGNAL_UNIT = "dBm"
     EXPERIMENTAL = True
     REPORTS = frozenset({"name", "location", "model"})
@@ -275,7 +299,7 @@ class CiscoWlcSnmp(AccessPointDriver):
                 retries=SNMP_RETRIES,
             )
             context = hlapi.ContextData()
-            columns = [*AP_COLUMNS.values(), *CLIENT_COLUMNS.values()]
+            columns = [*AP_COLUMNS.values(), *CLIENT_COLUMNS.values(), *EXTRA_COLUMNS.values()]
             # All at once: one engine tells concurrent requests apart by request ID.
             # Every walk is let finish, failed or not, before the engine closes: closing
             # with requests out makes their late answers fail inside pysnmp.
@@ -294,7 +318,7 @@ class CiscoWlcSnmp(AccessPointDriver):
         values = dict(zip(columns, walked))
         data = parse_columns(
             {name: values[oid] for name, oid in AP_COLUMNS.items()},
-            {name: values[oid] for name, oid in CLIENT_COLUMNS.items()},
+            {name: values[oid] for name, oid in {**CLIENT_COLUMNS, **EXTRA_COLUMNS}.items()},
             _shared.last(key),
         )
         return data

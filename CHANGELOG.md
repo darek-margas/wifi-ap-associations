@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.2
+
+- **`cisco_wlc_snmp` reads signal and connected time** for every client on every read:
+  RSSI from the Airespace client statistics (`bsnMobileStationStatsTable`, column 1,
+  dBm) and the seconds since the client associated from Cisco's client table
+  (`cldcClientTable`, column 15). Two reports from a C9800-CL 13 min 14 s apart
+  confirmed them: every client's connected time had grown by 795 s. Which clients exist
+  is still decided by the Airespace client table alone; rows found only in the other
+  two tables are ignored. A missing reading falls back to the previous one only if the
+  client is on the same AP.
+- **`cisco_wlc_ssh` is no longer experimental:** confirmed in Home Assistant on that
+  controller, with signal. Its description lists the five commands a restricted parser
+  view must allow (privilege 1 covers the summaries but not the client detail).
+- `cisco_wlc_snmp` stays experimental until it has run with signal.
+
 ## 0.8.1
 
 Follow-ups from a review of the Cisco SSH signal readings.
