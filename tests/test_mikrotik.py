@@ -230,3 +230,72 @@ def test_wireless_flag_a_means_ap_not_authorized_so_it_is_not_filtered() -> None
 
 def test_six_ghz_band() -> None:
     assert band_name("6ghz-be") == "6GHz"
+
+
+# --- RouterOS 7.24 with the wifi package built in but every radio on wireless (#12) ---
+
+# A cAP lite (RBcAPL-2nD) on RouterOS 7.24.4: the wifi menu exists and is empty.
+EMPTY_WIFI = ""
+CAPLITE_INTERFACES = (
+    " 0    name=wlan1 mtu=1500 l2mtu=1600 mac-address=04:F4:1C:00:00:30 interface-type=IPQ4018"
+    " mode=ap-bridge ssid=Home band=2ghz-b/g/n\n"
+    # A virtual AP (extra SSID) on wlan1: no band of its own. Values as in the report.
+    " 1 X  name=wlan30 mtu=1500 l2mtu=1600 mac-address=06:F4:1C:00:00:31 arp=enabled"
+    " interface-type=virtual master-interface=wlan1 mode=ap-bridge ssid=Home IoT area="
+    " max-station-count=2007 vlan-mode=use-tag vlan-id=30\n"
+)
+CAPLITE_CLIENTS = (
+    " 0 interface=wlan1 mac-address=5C:AD:BA:00:00:04 ap=no wds=no uptime=1h signal-strength=-58@1Mbps\n"
+    " 1 interface=wlan30 mac-address=5C:AD:BA:00:00:05 ap=no wds=no uptime=2h signal-strength=-63@1Mbps\n"
+)
+
+
+def test_empty_built_in_wifi_package_does_not_hide_wireless_clients() -> None:
+    result = parse_poll(
+        outputs(
+            wifi_interfaces=EMPTY_WIFI,
+            wifi_clients=EMPTY_WIFI,
+            wireless_interfaces=CAPLITE_INTERFACES,
+            wireless_clients=CAPLITE_CLIENTS,
+        )
+    )
+    assert [c.mac for c in result.clients] == ["5C:AD:BA:00:00:04", "5C:AD:BA:00:00:05"]
+
+
+def test_virtual_interface_takes_its_masters_band() -> None:
+    result = parse_poll(
+        outputs(
+            wifi_interfaces=EMPTY_WIFI,
+            wifi_clients=EMPTY_WIFI,
+            wireless_interfaces=CAPLITE_INTERFACES,
+            wireless_clients=CAPLITE_CLIENTS,
+        )
+    )
+    virtual = next(c for c in result.clients if c.mac == "5C:AD:BA:00:00:05")
+    assert (virtual.ssid, virtual.band, virtual.signal) == ("Home IoT", "2.4GHz", -63)
+
+
+def test_clients_of_both_packages_are_merged_once() -> None:
+    both = parse_poll(
+        outputs(
+            wifi_interfaces=WIFI_INTERFACES,
+            wifi_clients=WIFI_CLIENTS,
+            wireless_interfaces=CAPLITE_INTERFACES,
+            # The same client listed by both packages counts once.
+            wireless_clients=CAPLITE_CLIENTS
+            + " 2 interface=wlan1 mac-address=5C:AD:BA:00:00:01 uptime=5m signal-strength=-70@1Mbps\n",
+        )
+    )
+    macs = [c.mac for c in both.clients]
+    assert sorted(macs) == sorted(set(macs))
+    assert set(macs) == {"5C:AD:BA:00:00:01", "5C:AD:BA:00:00:02", "5C:AD:BA:00:00:04", "5C:AD:BA:00:00:05"}
+
+
+def test_master_interface_loop_does_not_hang() -> None:
+    from wifi_ap_associations.mikrotik_ssh import parse_interfaces
+
+    records = [
+        {"name": "a", "master-interface": "b"},
+        {"name": "b", "master-interface": "a"},
+    ]
+    assert parse_interfaces(records) == {"a": (None, None), "b": (None, None)}

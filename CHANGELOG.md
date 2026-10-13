@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.5
+
+- **MikroTik: clients of the `wireless` package were missed on recent RouterOS**
+  ([wifi-association-presence#12](https://github.com/darek-margas/wifi-association-presence/issues/12)).
+  RouterOS 7 now ships the `wifi` package built in, so `/interface wifi` answers (with
+  nothing) even on a device whose radios all run the `wireless` package, such as a cAP
+  lite on 7.24.4. The driver used the first package that answered and so reported no
+  clients at all. It now reads both packages and merges their clients; an unused
+  package's empty table adds nothing, and a client listed by both counts once.
+- MikroTik: a client on a **virtual interface** (an extra SSID on a radio,
+  `master-interface=`) gets its band from that radio; before, it had none.
+
 ## 0.8.4
 
 - **Collector, `mikrotik` command list: CAPsMAN details.** On a CAPsMAN controller the

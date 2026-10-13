@@ -17,9 +17,11 @@ System details, as RouterOS 7.20 prints them (confirmed on a CRS310):
                                   cpu-load: 2%
                                   board-name: CRS310-8G+2S+
 
-Clients come from the registration table of the Wi-Fi package the device has:
-`/interface wifi` (RouterOS 7, also called wifiwave2) or `/interface wireless`
-(RouterOS 6 and older 7 devices). `print terse` gives one client per line as
+Clients come from the registration tables of the Wi-Fi packages the device has:
+`/interface wifi` (RouterOS 7, also called wifiwave2) and `/interface wireless`
+(RouterOS 6 and older 7 devices). Both are read and their clients merged: recent
+RouterOS ships the `wifi` package built in, so its menu answers (with nothing) even on
+a device whose radios all run `wireless` (seen on a cAP lite with RouterOS 7.24.4). `print terse` gives one client per line as
 `key=value` pairs, e.g. (column names as MikroTik's WiFi manual lists them, not yet confirmed on a
 real access point, hence EXPERIMENTAL):
 
@@ -30,7 +32,9 @@ real access point, hence EXPERIMENTAL):
 
 Where the table lacks the SSID or band, they come from the interface list
 (`/interface wifi print terse`: configuration.ssid, channel.band; `/interface wireless
-print terse`: ssid, band). A CAPsMAN controller lists the clients of all its CAPs.
+print terse`: ssid, band). A virtual interface (an extra SSID, `master-interface=` its
+radio) has no band of its own and takes its master's. A CAPsMAN controller lists the
+clients of all its CAPs.
 """
 
 from __future__ import annotations
@@ -193,15 +197,31 @@ def parse_info(identity: dict[str, str], resource: dict[str, str]) -> AccessPoin
 
 
 def parse_interfaces(records: list[dict[str, str]]) -> dict[str, tuple[str | None, str | None]]:
-    """Interface name -> (SSID, band) from `/interface wifi|wireless print terse`."""
-    interfaces = {}
+    """Interface name -> (SSID, band) from `/interface wifi|wireless print terse`.
+
+    A virtual interface without a band of its own takes its master interface's band
+    (following a chain of masters, never in a loop).
+    """
+    own: dict[str, tuple[str | None, str | None]] = {}
+    masters: dict[str, str] = {}
     for record in records:
         name = record.get("name")
         if not name:
             continue
         ssid = record.get("configuration.ssid") or record.get("ssid") or None
         band = record.get("channel.band") or record.get("band")
-        interfaces[name] = (ssid, band_name(band))
+        own[name] = (ssid, band_name(band))
+        if master := record.get("master-interface") or record.get("configuration.master-interface"):
+            masters[name] = master
+    interfaces = {}
+    for name, (ssid, band) in own.items():
+        seen = {name}
+        current = name
+        while band is None and (master := masters.get(current)) and master not in seen:
+            seen.add(master)
+            band = own.get(master, (None, None))[1]
+            current = master
+        interfaces[name] = (ssid, band)
     return interfaces
 
 
@@ -245,15 +265,18 @@ def parse_clients(
 def parse_poll(outputs: dict[str, str]) -> PollResult:
     """Clients and device details from the outputs of COMMANDS (keyed like COMMANDS).
 
-    The `wifi` package is used when present, else `wireless`. A device with neither
-    (a switch) has no clients. A registration table that exists but can't be read
-    raises, so a failed read isn't taken for "everyone left".
+    The clients of every Wi-Fi package whose menu exists (`wifi`, `wireless`) are
+    merged: an unused package's empty table adds nothing, and a device with radios on
+    both packages lists all of them. A device with neither (a switch) has no clients. A
+    registration table that exists but can't be read raises, so a failed read isn't
+    taken for "everyone left".
     """
     identity = parse_print(outputs.get("identity", ""))
     resource = parse_print(outputs.get("resource", ""))
     if not resource:
         raise AccessPointError("No answer to /system resource print")
     clients: list[AssociatedClient] = []
+    seen: set[str] = set()
     for package in ("wifi", "wireless"):
         table = outputs.get(f"{package}_clients", "")
         if is_missing_menu(table):
@@ -262,8 +285,10 @@ def parse_poll(outputs: dict[str, str]) -> PollResult:
         if table.strip() and not records:
             raise AccessPointError(f"Could not read the {package} registration table")
         interfaces = parse_interfaces(parse_terse(outputs.get(f"{package}_interfaces", "")))
-        clients = parse_clients(records, interfaces, authorized_only=package == "wifi")
-        break
+        for client in parse_clients(records, interfaces, authorized_only=package == "wifi"):
+            if client.mac not in seen:
+                seen.add(client.mac)
+                clients.append(client)
     return PollResult(clients, parse_info(identity, resource))
 
 
