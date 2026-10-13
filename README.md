@@ -12,7 +12,9 @@ minutes.
 This is the library behind the Home Assistant integration
 [Wi-Fi Association Presence](https://github.com/darek-margas/wifi-association-presence),
 but it has no Home Assistant imports and works in any asyncio program: a network
-inventory, an exporter for Prometheus, your own scripts.
+inventory, an exporter for Prometheus, your own scripts. An MQTT bridge built on it, as
+a container for Node-RED and other MQTT users, is an idea on the integration's
+[roadmap](https://github.com/darek-margas/wifi-association-presence#roadmap).
 
 ## Supported access points
 
