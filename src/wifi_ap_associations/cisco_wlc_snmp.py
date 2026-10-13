@@ -34,6 +34,7 @@ is better for presence than briefly showing it gone.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from . import (
@@ -48,6 +49,7 @@ from . import (
 from .cisco_wlc import (
     CONF_AP_NAME,
     STATE_REGISTERED,
+    ClientReading,
     ControllerClient,
     ControllerData,
     JoinedAp,
@@ -96,6 +98,10 @@ SNMP_TIMEOUT = 2  # seconds per request
 SNMP_RETRIES = 2
 SHARE_SECONDS = 20
 SNMP_VERSIONS = ("v2c", "v3")
+# A signal or connected time missing from a read is taken from the last one actually
+# measured on the same AP, if it is at most this old (about two polls); never from a
+# value that was itself carried over.
+READING_FALLBACK_SECONDS = 150
 
 # Also keeps each controller's last read, for clients a read catches half-way.
 _shared = SharedReads(SHARE_SECONDS)
@@ -128,6 +134,7 @@ def parse_columns(
     aps: dict[str, dict[str, Any]],
     clients: dict[str, dict[str, Any]],
     previous: ControllerData | None = None,
+    now: float | None = None,
 ) -> ControllerData:
     """All APs and clients from walked columns: {column: {row MAC: value}}.
 
@@ -137,7 +144,16 @@ def parse_columns(
     client already known keeps its AP and state for one more read instead of looking
     gone, and one that just left disappears a read later, once no column lists it. A
     client the previous read didn't know is left out until a read has all its details.
+
+    Signal and connected time are stored as readings with the moment they were measured
+    (`now`, time.monotonic() by default). One missing from a read falls back to the last
+    measured reading on the same AP while it is under READING_FALLBACK_SECONDS old, its
+    connected time grown by the reading's age; after that it is unknown. A measured value
+    always replaces the reading, so a reconnect shows its new, shorter time as soon as
+    the column answers again.
     """
+    now = time.monotonic() if now is None else now
+    readings = dict(previous.readings) if previous else {}
     joined: dict[str, JoinedAp] = {}
     name_by_mac: dict[str, str] = {}
     for ap_mac, raw_name in aps.get("name", {}).items():
@@ -171,7 +187,18 @@ def parse_columns(
         connected = _int(clients.get("connected", {}).get(mac))
         if connected is not None and connected < 0:
             connected = None
-        same_ap = before is not None and before.ap_name == ap_name
+        if signal is not None or connected is not None:
+            readings[mac] = ClientReading(ap_name, signal, connected, now)
+        else:
+            reading = readings.get(mac)
+            if (
+                reading is not None
+                and reading.ap_name == ap_name
+                and now - reading.read_at <= READING_FALLBACK_SECONDS
+            ):
+                signal = reading.signal
+                if reading.connected_seconds is not None:
+                    connected = reading.connected_seconds + int(now - reading.read_at)
         found.append(
             ControllerClient(
                 mac=mac,
@@ -181,16 +208,17 @@ def parse_columns(
                 protocol=None,
                 ssid=ssid or (before.ssid if before else None),
                 band=band or (before.band if before else None),
-                # A missing reading falls back only to one taken on the same AP.
-                signal=signal if signal is not None else (before.signal if same_ap else None),
-                connected_seconds=(
-                    connected
-                    if connected is not None
-                    else (before.connected_seconds if same_ap else None)
-                ),
+                signal=signal,
+                connected_seconds=connected,
             )
         )
-    return ControllerData(aps=joined, ssids={}, clients=found)
+    # Readings of clients no longer listed, or too old to fall back to, are dropped.
+    kept = {
+        mac: reading
+        for mac, reading in readings.items()
+        if mac in listed and now - reading.read_at <= READING_FALLBACK_SECONDS
+    }
+    return ControllerData(aps=joined, ssids={}, clients=found, readings=kept)
 
 
 def _row_mac(oid: str, column: str) -> str | None:

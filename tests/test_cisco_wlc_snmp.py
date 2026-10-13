@@ -608,16 +608,41 @@ def test_out_of_range_signal_is_dropped() -> None:
 
 def test_missing_signal_keeps_the_previous_one_only_on_the_same_ap() -> None:
     aps, clients = fixture_columns(SIGNAL_FIXTURE)
-    previous = parse_columns(aps, clients)
+    previous = parse_columns(aps, clients, now=1000.0)
     mac = "02:00:00:00:00:12"
-    del clients["signal"][mac]
-    same = next(c for c in parse_columns(aps, clients, previous).clients if c.mac == mac)
-    assert same.signal == -64
+    del clients["signal"][mac], clients["connected"][mac]
+    same = next(c for c in parse_columns(aps, clients, previous, now=1060.0).clients if c.mac == mac)
+    assert (same.signal, same.connected_seconds) == (-64, 7559 + 60)
     # Roamed to the other AP meanwhile: the old AP's signal doesn't apply.
     other = AP02_RADIO if clients["ap"][mac] == bytes.fromhex(AP01_RADIO.replace(":", "")) else AP01_RADIO
     clients["ap"][mac] = bytes.fromhex(other.replace(":", ""))
-    moved = next(c for c in parse_columns(aps, clients, previous).clients if c.mac == mac)
-    assert moved.signal is None
+    moved = next(c for c in parse_columns(aps, clients, previous, now=1060.0).clients if c.mac == mac)
+    assert (moved.signal, moved.connected_seconds) == (None, None)
+
+
+def test_a_missing_reading_is_not_carried_on_for_good() -> None:
+    """Fallback only to a measured reading, and only while it is recent."""
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    mac = "02:00:00:00:00:12"
+    data = parse_columns(aps, clients, now=1000.0)
+    del clients["signal"][mac], clients["connected"][mac]  # the columns stop listing it
+    seen = []
+    for now in (1060.0, 1120.0, 1180.0, 1240.0):
+        data = parse_columns(aps, clients, data, now=now)
+        client = next(c for c in data.clients if c.mac == mac)
+        seen.append(client.signal)
+    # Measured at 1000: carried while under 150 s old, then unknown, and it stays so.
+    assert seen == [-64, -64, None, None]
+    assert next(c for c in data.clients if c.mac == mac).connected_seconds is None
+
+
+def test_reconnect_shows_the_new_connected_time_once_measured() -> None:
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    mac = "02:00:00:00:00:12"
+    data = parse_columns(aps, clients, now=1000.0)  # 7559 s connected
+    clients["connected"][mac] = 30  # reconnected meanwhile
+    client = next(c for c in parse_columns(aps, clients, data, now=1060.0).clients if c.mac == mac)
+    assert client.connected_seconds == 30
 
 
 def test_real_pysnmp_reads_signal_from_a_local_agent(monkeypatch: pytest.MonkeyPatch) -> None:

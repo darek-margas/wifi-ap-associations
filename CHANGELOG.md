@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.3
+
+Follow-up from a review of the Cisco SNMP signal readings.
+
+- **A missing signal or connected time is no longer carried forward for good.** In
+  0.8.2, a value missing from a read was copied from the previous read, even if that
+  value had been copied too, so a client whose row stopped appearing in the signal
+  table could keep an old signal for as long as it stayed on the AP. Now every measured
+  value is stored with when it was measured, and a missing one falls back only to a
+  measurement under 150 s old (about two polls) on the same AP; after that it is
+  unknown. The connected time is carried forward from that measurement.
+- A new measurement always replaces the old one, so after a reconnect the connected time
+  shows the new association as soon as the controller reports it.
+
 ## 0.8.2
 
 - **`cisco_wlc_snmp` reads signal and connected time** for every client on every read:
