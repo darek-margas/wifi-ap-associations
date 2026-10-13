@@ -18,7 +18,9 @@ Cisco's client MIB, which the 9800 serves (confirmed on a C9800-CL with IOS-XE 1
       .15 seconds since the client (re)associated; in two reports 13 min 14 s apart it
           had grown by 795 for every client. (.14 holds when, but on a clock a day off.)
 
-Signal and connected time come for every client on every read. Which clients exist is
+Signal and connected time come for every client on every read; one a read misses is
+taken from the last measurement on the same AP while under READING_FALLBACK_SECONDS
+old (see parse_columns), then it is unknown. Which clients exist is
 decided by the client table alone: the other two tables also hold rows for devices
 that aren't wireless clients, and those are ignored. SNMP v2c with a community, or v3
 with a user and keys, as the snmp_version setting says.
