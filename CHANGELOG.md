@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.4
+
+- **Collector, `mikrotik` command list: CAPsMAN details.** On a CAPsMAN controller the
+  registration table lists the clients of every CAP, and names only the interface each
+  client is on (e.g. `ap_upstairs-virtual8`). To learn which CAP an interface belongs to,
+  reports now also include `/interface wifi radio print terse` and
+  `/interface wifi capsman remote-cap print terse` (the `wifi` package, RouterOS 7) and
+  `/caps-man interface print terse` and `/caps-man remote-cap print terse` (the legacy
+  `caps-man`, RouterOS 6). Devices without CAPsMAN answer "bad command name", which the
+  report shows and nothing else minds. This is the groundwork for one access point per
+  CAP, asked for in
+  [wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11).
+- The registration-table format of that issue (flags, `interface`, `ssid`,
+  `mac-address`, `uptime`, `signal`, `band`, an interface name with a space) is what
+  `mikrotik_ssh` already parses: the first real MikroTik output seen.
+
 ## 0.8.3
 
 Follow-up from a review of the Cisco SNMP signal readings.

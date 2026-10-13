@@ -115,6 +115,13 @@ PROFILES: dict[str, list[str]] = {
         "/interface wifi registration-table print terse",
         "/interface wifiwave2 registration-table print terse",
         "/caps-man registration-table print terse",
+        # CAPsMAN: on the controller, the client tables name interfaces of remote CAPs.
+        # Which CAP an interface belongs to: its radio (wifi package, RouterOS 7) or its
+        # CAP interface (caps-man, RouterOS 6), and the CAPs the controller knows.
+        "/interface wifi radio print terse",
+        "/interface wifi capsman remote-cap print terse",
+        "/caps-man interface print terse",
+        "/caps-man remote-cap print terse",
     ],
     # Cisco wireless LAN controllers (Catalyst 9800, IOS-XE). Lightweight APs (9120,
     # 3802, 1815...) don't list clients themselves; the controller does.
