@@ -5,6 +5,7 @@ Usage:
     wifi-ap-probe --type cisco_wlc_ssh --host 192.168.1.20 --username ha --ap-name AP01
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01 --snmp-version v3 --username ro --auth-protocol sha256
+    wifi-ap-probe --type mikrotik_capsman_ssh --host 192.168.1.1 --username admin --cap ap_upstairs
     wifi-ap-probe --list-types
 
 Secrets are asked for interactively, or taken from the environment: the password and
@@ -47,6 +48,7 @@ def main() -> int:
     parser.add_argument("--port", type=int)
     parser.add_argument("--username")
     parser.add_argument("--ap-name", help="AP name on the controller (cisco_wlc_*)")
+    parser.add_argument("--cap", help="CAP identity on the CAPsMAN controller (mikrotik_capsman_ssh)")
     parser.add_argument("--snmp-version", help="v2c or v3 (default: v3 if --username)")
     parser.add_argument("--auth-protocol", help="SNMPv3 authentication, e.g. sha256")
     parser.add_argument("--priv-protocol", help="SNMPv3 privacy, e.g. aes")

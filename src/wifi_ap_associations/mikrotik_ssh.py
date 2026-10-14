@@ -322,24 +322,31 @@ class MikroTikSsh(AccessPointDriver):
         return parse_poll(await self._run_all())
 
     async def _run_all(self) -> dict[str, str]:
-        host = self.config["host"]
-        try:
-            async with asyncssh.connect(
-                host,
-                port=int(self.config.get("port") or 22),
-                username=self.config["username"],
-                password=self.config["password"],
-                **self.SSH_POLICY.connect_options(),
-            ) as conn:
-                outputs: dict[str, Any] = {}
-                for key, command in COMMANDS.items():
-                    result = await asyncio.wait_for(
-                        conn.run(command, check=False, encoding="utf-8", errors="replace"),
-                        COMMAND_TIMEOUT,
-                    )
-                    outputs[key] = f"{result.stdout or ''}{result.stderr or ''}".replace("\r", "")
-        except asyncssh.PermissionDenied as err:
-            raise AccessPointAuthError(f"{host}: login rejected") from err
-        except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
-            raise AccessPointError(f"{host}: {err!r}") from err
-        return outputs
+        return await run_commands(self.config, COMMANDS, self.SSH_POLICY)
+
+
+async def run_commands(
+    config: dict[str, Any], commands: dict[str, str], policy: SshPolicy
+) -> dict[str, str]:
+    """Each command as its own SSH exec request on one connection, outputs by key."""
+    host = config["host"]
+    try:
+        async with asyncssh.connect(
+            host,
+            port=int(config.get("port") or 22),
+            username=config["username"],
+            password=config["password"],
+            **policy.connect_options(),
+        ) as conn:
+            outputs: dict[str, str] = {}
+            for key, command in commands.items():
+                result = await asyncio.wait_for(
+                    conn.run(command, check=False, encoding="utf-8", errors="replace"),
+                    COMMAND_TIMEOUT,
+                )
+                outputs[key] = f"{result.stdout or ''}{result.stderr or ''}".replace("\r", "")
+    except asyncssh.PermissionDenied as err:
+        raise AccessPointAuthError(f"{host}: login rejected") from err
+    except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
+        raise AccessPointError(f"{host}: {err!r}") from err
+    return outputs

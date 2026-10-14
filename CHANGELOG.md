@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.0
+
+- **New driver `mikrotik_capsman_ssh` (experimental): MikroTik CAPsMAN controllers**
+  (RouterOS 7, `wifi` package), with **one access point per CAP**. On CAPsMAN the CAPs
+  don't list their clients, the controller does, naming only the interface each client
+  is on. The driver reads three tables from the controller over SSH, once per poll for
+  all its CAPs: the remote CAPs (`/interface wifi capsman remote-cap`), the interfaces
+  (`/interface wifi`, where a CAP radio's interface carries `cap=<identity>@...` and a
+  virtual interface leads to it through `master-interface=`) and the registration
+  table. Each client is put on its CAP, with SSID, band, signal and connected time; each
+  CAP reports its board name, RouterOS version and uptime. A CAP the controller doesn't
+  list, or that isn't in state Ok, is unreadable rather than empty. Settings: the
+  controller's address and login plus the CAP's identity (`cap`), the unique setting
+  together with the host.
+- Built and tested from a CAPsMAN router with two cAP ax on RouterOS 7.24.4
+  ([wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11)).
+  The legacy CAPsMAN of the `wireless` package (`/caps-man`) isn't covered yet.
+- `mikrotik_ssh.run_commands()`: the SSH exec runner, shared by both MikroTik drivers.
+- Controller APs (`cisco_wlc.JoinedAp`) can carry firmware and uptime.
+- `wifi-ap-probe --cap`.
+
 ## 0.8.5
 
 - **MikroTik: clients of the `wireless` package were missed on recent RouterOS**

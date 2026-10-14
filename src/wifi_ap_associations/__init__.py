@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.8.5"
+__version__ = "0.9.0"
 
 
 class AccessPointError(Exception):
@@ -189,6 +189,7 @@ from . import (  # noqa: E402, F401
     cisco_wlc_snmp,
     cisco_wlc_ssh,
     dlink_dap_ssh,
+    mikrotik_capsman_ssh,
     mikrotik_ssh,
     openwrt_ssh,
     unifi_network,

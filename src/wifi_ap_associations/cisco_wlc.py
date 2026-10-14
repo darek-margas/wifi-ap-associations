@@ -31,6 +31,8 @@ class JoinedAp:
     model: str | None
     state: str
     location: str | None
+    firmware: str | None = None
+    uptime_seconds: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +119,14 @@ def poll_result(data: ControllerData, ap_name: str) -> PollResult:
         for client in data.clients
         if client.ap_name == ap_name and client.state == STATE_RUN
     ]
-    return PollResult(clients, AccessPointInfo(name=ap.name, location=ap.location, model=ap.model))
+    info = AccessPointInfo(
+        name=ap.name,
+        location=ap.location,
+        model=ap.model,
+        firmware=ap.firmware,
+        uptime_seconds=ap.uptime_seconds,
+    )
+    return PollResult(clients, info)
 
 
 class SharedReads:
