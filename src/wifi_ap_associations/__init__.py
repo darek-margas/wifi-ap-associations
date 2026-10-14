@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.10.2"
+__version__ = "0.10.3"
 
 
 class AccessPointError(Exception):

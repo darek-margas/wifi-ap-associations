@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.3
+
+From a review of 0.10.2 and a tester's report of arrivals taking 5 to 30 s
+([wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11)).
+
+- **A reconnect is an arrival, however soon.** Leaving prints nothing, so the 60 s
+  filter took a phone that left and came back on the same interface within a minute
+  for one re-authenticating, and waited for the next poll. The filter now asks the
+  driver whether its last poll saw the client: one it didn't see always counts; one it
+  saw counts again only on another interface or after 60 s. `watch_registrations()`
+  takes `present`; `MikroTikSsh` remembers the clients of its last poll, and the CAPsMAN
+  driver asks the controller's last shared read.
+- **Debug logging of the change feed:** each line received, the filter's decision and
+  why, a feed ending, and how long each poll command took (logger
+  `wifi_ap_associations`).
+- `wifi-ap-probe --debug` prints those logs with timestamps; with `--watch` it shows
+  when each line arrives against when the phone joined.
+- Test: lines of a real AsyncSSH exec stream arrive one by one, not buffered.
+
 ## 0.10.2
 
 - **MikroTik watch: only arrivals and roams.** A tester's `print follow-only` capture

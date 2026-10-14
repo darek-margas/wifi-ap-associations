@@ -111,6 +111,7 @@ wifi-ap-probe --type openwrt_ssh --host 192.168.1.2 --username root
 wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
 wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01 --username ro --auth-protocol sha256  # v3
 wifi-ap-probe --type mikrotik_ssh --host 192.168.1.1 --username admin --watch  # follow changes
+wifi-ap-probe --type mikrotik_ssh --host 192.168.1.1 --username admin --watch --debug  # with each line, timed
 wifi-ap-probe --list-types
 
 # Collect read-only, redacted data from an access point that has no driver yet

@@ -202,15 +202,17 @@ class MikroTikCapsmanSsh(AccessPointDriver):
         """Clients associated to this CAP."""
         return (await self.async_poll()).clients
 
-    async def async_poll(self) -> PollResult:
-        """This CAP's clients and details, from a controller read shared with its other CAPs."""
-        key = (
+    def _read_key(self) -> tuple[Any, ...]:
+        return (
             str(self.config["host"]),
             int(self.config.get("port") or 22),
             str(self.config["username"]),
             str(self.config["password"]),
         )
-        data = await _shared.read(key, self._read_controller)
+
+    async def async_poll(self) -> PollResult:
+        """This CAP's clients and details, from a controller read shared with its other CAPs."""
+        data = await _shared.read(self._read_key(), self._read_controller)
         return poll_result(data, str(self.config[CONF_CAP]).strip())
 
     def watch_key(self) -> Hashable:
@@ -225,7 +227,18 @@ class MikroTikCapsmanSsh(AccessPointDriver):
     async def async_watch(self, on_change: Callable[[], None]) -> None:
         """Follow the controller's registration table (all CAPs' clients)."""
         await watch_registrations(
-            self.config, [WATCH_COMMANDS["wifi"]], self.SSH_POLICY, on_change
+            self.config,
+            [WATCH_COMMANDS["wifi"]],
+            self.SSH_POLICY,
+            on_change,
+            present=self._present,
+        )
+
+    def _present(self, mac: str) -> bool:
+        """Whether the controller's last read saw the client connected, on any CAP."""
+        data = _shared.last(self._read_key())
+        return data is not None and any(
+            client.mac == mac and client.state == STATE_RUN for client in data.clients
         )
 
     async def _read_controller(self) -> ControllerData:

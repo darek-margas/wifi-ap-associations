@@ -11,7 +11,9 @@ Usage:
 
 --watch (drivers that can, e.g. MikroTik) keeps the device's change feed open and
 prints a line with the time and the new client count whenever it reports a change,
-until Ctrl+C: what instant arrivals in Home Assistant react to.
+until Ctrl+C: what instant arrivals in Home Assistant react to. --debug also prints,
+with milliseconds, every line the feed delivers, why it does or doesn't ask for a poll,
+and how long each command of a poll takes.
 
 Secrets are asked for interactively, or taken from the environment: the password and
 an SNMPv3 authentication key from $AP_PASSWORD, an SNMP community from $AP_COMMUNITY,
@@ -24,6 +26,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import getpass
+import logging
 import os
 import sys
 import time
@@ -60,6 +63,10 @@ def main() -> int:
     parser.add_argument("--priv-protocol", help="SNMPv3 privacy, e.g. aes")
     parser.add_argument("--list-types", action="store_true")
     parser.add_argument("--watch", action="store_true", help="follow changes until Ctrl+C")
+    parser.add_argument(
+        "--debug", action="store_true",
+        help="log each command's time and, with --watch, each change line and decision",
+    )
     args = parser.parse_args()
 
     if args.list_types:
@@ -72,6 +79,9 @@ def main() -> int:
         parser.error("--host is required")
 
     driver_cls = DRIVERS[args.type]
+    if args.debug:
+        logging.basicConfig(format="%(asctime)s.%(msecs)03d %(message)s", datefmt="%H:%M:%S")
+        logging.getLogger("wifi_ap_associations").setLevel(logging.DEBUG)
     if args.snmp_version is None and args.username:
         args.snmp_version = "v3"  # an SNMP user means v3; ignored by non-SNMP drivers
     config: dict[str, object] = {}

@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import replace
+import logging
 import re
 import time
 from typing import Any
@@ -383,9 +384,14 @@ class MikroTikSsh(AccessPointDriver):
         """Clients associated to the device's radios."""
         return (await self.async_poll()).clients
 
+    # Clients the last poll saw: a change line for anyone else is an arrival.
+    _present: frozenset[str] = frozenset()
+
     async def async_poll(self) -> PollResult:
         """Clients and device details, one exec request per command on one connection."""
-        return parse_poll(await self._run_all())
+        result = parse_poll(await self._run_all())
+        self._present = frozenset(client.mac for client in result.clients)
+        return result
 
     async def _run_all(self) -> dict[str, str]:
         return await run_commands(self.config, COMMANDS, self.SSH_POLICY)
@@ -393,7 +399,11 @@ class MikroTikSsh(AccessPointDriver):
     async def async_watch(self, on_change: Callable[[], None]) -> None:
         """Follow both Wi-Fi packages' registration tables (see watch_registrations)."""
         await watch_registrations(
-            self.config, list(WATCH_COMMANDS.values()), self.SSH_POLICY, on_change
+            self.config,
+            list(WATCH_COMMANDS.values()),
+            self.SSH_POLICY,
+            on_change,
+            present=lambda mac: mac in self._present,
         )
 
 
@@ -404,45 +414,65 @@ WATCH_COMMANDS = {
 }
 # Dead connections are noticed within about a minute and a half.
 WATCH_KEEPALIVE = {"keepalive_interval": 30, "keepalive_count_max": 3}
-# A client seen again on the same interface within this long is no news: some clients
-# re-authenticate every second or two, and each time follow-only prints a line.
+# A client the last poll saw, printed again on the same interface within this long, is
+# no news: some clients re-authenticate every second or two, each time with a line.
 WATCH_REPEAT_SECONDS = 60
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _ChangeFilter:
-    """Which follow-only lines are worth a poll: an arrival or a roam, once.
+    """Which follow-only lines are worth a poll: an arrival or a roam.
 
     Seen on RouterOS 7.24.4 (#11): a joining client prints a line, a roam prints one
     for the new interface, leaving prints nothing, and a client that keeps
     re-authenticating prints a line each time. In the `wifi` package a client shows
     first without the A (authorized) flag and a moment later with it; polling on the
     first line would find it not yet counted, so only authorized lines count there.
-    The `wireless` package prints no flags. A client counts again when it is on another
-    interface (a roam) or after WATCH_REPEAT_SECONDS.
+    The `wireless` package prints no flags.
+
+    `present(mac)` tells whether the last poll saw the client. One it didn't see always
+    counts: a phone that left and comes back is an arrival even on the same interface a
+    moment later (leaving prints nothing, so the lines alone can't tell). One it saw
+    counts again only on another interface (a roam) or after WATCH_REPEAT_SECONDS.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, present: Callable[[str], bool] | None = None) -> None:
         self._seen: dict[str, tuple[str, float]] = {}
+        self._present = present
 
     def wanted(self, line: str, authorized_only: bool, now: float) -> bool:
         if "mac-address=" not in line:
             return False
         records = parse_terse(line)
         if not records:
-            return True  # a client line that can't be read: poll anyway
+            _LOGGER.debug("Change feed: unreadable client line, polling: %s", line.strip())
+            return True
         record = records[0]
-        if authorized_only and "A" not in record.get("_flags", ""):
-            return False
         raw = record.get("mac-address", "")
         try:
             mac = normalize_mac(raw)
         except ValueError:
             mac = raw
         interface = record.get("interface", "")
+        if authorized_only and "A" not in record.get("_flags", ""):
+            _LOGGER.debug("Change feed: %s on %s still authenticating, waiting", mac, interface)
+            return False
         last = self._seen.get(mac)
-        if last is not None and last[0] == interface and now - last[1] < WATCH_REPEAT_SECONDS:
+        self_present = self._present(mac) if self._present is not None else False
+        if not self_present:
+            reason = "not in the last poll"
+        elif last is None:
+            reason = "first line for it"
+        elif last[0] != interface:
+            reason = f"moved from {last[0]}"
+        elif now - last[1] >= WATCH_REPEAT_SECONDS:
+            reason = f"again after {now - last[1]:.0f} s"
+        else:
+            _LOGGER.debug("Change feed: %s on %s already there, skipped", mac, interface)
             return False
         self._seen[mac] = (interface, now)
+        _LOGGER.debug("Change feed: %s on %s, %s: polling", mac, interface, reason)
         return True
 
 
@@ -451,6 +481,7 @@ async def watch_registrations(
     commands: list[str],
     policy: SshPolicy,
     on_change: Callable[[], None],
+    present: Callable[[str], bool] | None = None,
 ) -> None:
     """Run `print follow-only` commands and call on_change() for arrivals and roams.
 
@@ -470,7 +501,9 @@ async def watch_registrations(
             **policy.connect_options(),
             **WATCH_KEEPALIVE,
         ) as conn:
-            changes = _ChangeFilter()  # one for all commands: a roam may cross packages
+            # One filter for all commands: a roam may cross packages.
+            changes = _ChangeFilter(present)
+            _LOGGER.debug("%s: watching %s", host, ", ".join(commands))
             pending = {
                 asyncio.ensure_future(_follow(conn, command, on_change, changes))
                 for command in commands
@@ -504,12 +537,15 @@ async def _follow(
         while True:
             line = await process.stdout.readline()
             if not line:
+                _LOGGER.debug("Change feed ended: %s", command)
                 return "ended"
             if not line.strip():
                 continue
             if first and is_missing_menu(line):
+                _LOGGER.debug("Change feed not available: %s", command)
                 return "missing"
             first = False
+            _LOGGER.debug("Change feed line: %s", line.strip())
             if changes.wanted(line, authorized_only, time.monotonic()):
                 on_change()
 
@@ -529,11 +565,13 @@ async def run_commands(
         ) as conn:
             outputs: dict[str, str] = {}
             for key, command in commands.items():
+                started = time.monotonic()
                 result = await asyncio.wait_for(
                     conn.run(command, check=False, encoding="utf-8", errors="replace"),
                     COMMAND_TIMEOUT,
                 )
                 outputs[key] = f"{result.stdout or ''}{result.stderr or ''}".replace("\r", "")
+                _LOGGER.debug("%s: %s took %.2f s", host, command, time.monotonic() - started)
     except asyncssh.PermissionDenied as err:
         raise AccessPointAuthError(f"{host}: login rejected") from err
     except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
