@@ -13,10 +13,11 @@ Wi-Fi Association Presence integration, which offers the registered types in its
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.9.3"
+__version__ = "0.10.0"
 
 
 class AccessPointError(Exception):
@@ -136,6 +137,26 @@ class AccessPointDriver(ABC):
             for key in cls.IDENTITY_FIELDS or (cls.UNIQUE_FIELD,)
         )
         return values if all(values) else None
+
+    WATCHES: ClassVar[bool] = False
+    """Whether async_watch() can tell, as it happens, that the clients may have changed
+    (instant arrivals). A program then polls at once instead of waiting for its next
+    poll; the poll still decides who is there."""
+
+    def watch_key(self) -> Hashable:
+        """What one watch covers. Drivers with equal keys share one watch, e.g. the CAPs
+        of one CAPsMAN controller; by default each access point has its own."""
+        return (self.TYPE, self.identity(self.config))
+
+    async def async_watch(self, on_change: Callable[[], None]) -> None:
+        """Call on_change() whenever the access point's clients may have changed.
+
+        Runs until cancelled. on_change() takes no arguments: nothing an event says is
+        trusted, it only asks for a poll. Raises AccessPointAuthError or AccessPointError
+        when the watch can't go on (connection lost, the device ended it); the caller
+        tries again later. Only drivers with WATCHES = True implement it.
+        """
+        raise NotImplementedError(f"{self.TYPE} can't watch for changes")
 
     BLOCKING_IMPORTS: ClassVar[tuple[str, ...]] = ()
     """Modules the driver imports on its first poll that load files from disk (e.g.

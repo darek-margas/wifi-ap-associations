@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0
+
+- **Watching for changes (instant arrivals), experimental.** Drivers can say
+  `WATCHES = True` and offer `async_watch(on_change)`: it keeps the device's change feed
+  open and calls `on_change()` (no arguments: nothing in the event is trusted) whenever
+  the clients may have changed, so the caller can poll at once instead of waiting a
+  minute. It runs until cancelled and raises `AccessPointError` or
+  `AccessPointAuthError` when the feed can't go on. `watch_key()` says which drivers
+  share one watch.
+- **MikroTik watches**, with `/interface wifi registration-table print follow-only terse`
+  and its `wireless` counterpart over the same SSH login (keep-alives every 30 s). Any
+  line naming a `mac-address=` counts as a change; a package that isn't installed is
+  skipped. A CAPsMAN controller is watched once for all its CAPs (`print follow-only` of
+  the `wifi` package), and its CAPs share a read for 3 s instead of 20, so a poll an
+  event triggers reads the controller again. The exact `follow-only` output hasn't been
+  seen from a device yet, hence experimental.
+- `wifi-ap-probe --watch` prints a line with the time and client count for every change
+  until Ctrl+C, to try it without Home Assistant.
+
 ## 0.9.3
 
 - **`mikrotik_ssh` and `mikrotik_capsman_ssh` are no longer experimental.** Confirmed

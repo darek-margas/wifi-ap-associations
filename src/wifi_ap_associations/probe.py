@@ -6,7 +6,12 @@ Usage:
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01 --snmp-version v3 --username ro --auth-protocol sha256
     wifi-ap-probe --type mikrotik_capsman_ssh --host 192.168.1.1 --username admin --cap ap_upstairs
+    wifi-ap-probe --type mikrotik_ssh --host 192.168.1.2 --username admin --watch
     wifi-ap-probe --list-types
+
+--watch (drivers that can, e.g. MikroTik) keeps the device's change feed open and
+prints a line with the time and the new client count whenever it reports a change,
+until Ctrl+C: what instant arrivals in Home Assistant react to.
 
 Secrets are asked for interactively, or taken from the environment: the password and
 an SNMPv3 authentication key from $AP_PASSWORD, an SNMP community from $AP_COMMUNITY,
@@ -21,6 +26,7 @@ import asyncio
 import getpass
 import os
 import sys
+import time
 
 from wifi_ap_associations import DRIVERS, AccessPointError
 
@@ -53,6 +59,7 @@ def main() -> int:
     parser.add_argument("--auth-protocol", help="SNMPv3 authentication, e.g. sha256")
     parser.add_argument("--priv-protocol", help="SNMPv3 privacy, e.g. aes")
     parser.add_argument("--list-types", action="store_true")
+    parser.add_argument("--watch", action="store_true", help="follow changes until Ctrl+C")
     args = parser.parse_args()
 
     if args.list_types:
@@ -78,8 +85,11 @@ def main() -> int:
             value = _secret(field.key, field.optional, snmp_v3=args.snmp_version == "v3")
         config[field.key] = value if value is not None else field.default
 
+    driver = driver_cls(config)
+    if args.watch and not driver_cls.WATCHES:
+        parser.error(f"{args.type} can't watch for changes")
     try:
-        clients = asyncio.run(driver_cls(config).async_get_associated_clients())
+        clients = asyncio.run(driver.async_get_associated_clients())
     except AccessPointError as err:
         print(f"FAILED: {err}", file=sys.stderr)
         return 1
@@ -92,7 +102,37 @@ def main() -> int:
             f"  {c.connected_seconds if c.connected_seconds is not None else '?':>8}s"
             f"  {c.ssid or '?'}"
         )
+    if args.watch:
+        try:
+            return asyncio.run(_watch(driver))
+        except KeyboardInterrupt:
+            return 0
     return 0
+
+
+async def _watch(driver) -> int:
+    """Print each change the driver reports, with the client count of a poll right after."""
+    changed = asyncio.Event()
+    started = time.monotonic()
+    watch = asyncio.ensure_future(driver.async_watch(changed.set))
+    print("watching for changes (Ctrl+C to stop)")
+    try:
+        while True:
+            waiter = asyncio.ensure_future(changed.wait())
+            done, _ = await asyncio.wait({watch, waiter}, return_when=asyncio.FIRST_COMPLETED)
+            if watch in done:
+                waiter.cancel()
+                watch.result()  # raises why the watch ended
+                return 1
+            changed.clear()
+            clients = await driver.async_get_associated_clients()
+            print(f"{time.strftime('%H:%M:%S')} +{time.monotonic() - started:.0f}s"
+                  f"  change: {len(clients)} associated client(s)")
+    except AccessPointError as err:
+        print(f"FAILED: {err}", file=sys.stderr)
+        return 1
+    finally:
+        watch.cancel()
 
 
 if __name__ == "__main__":

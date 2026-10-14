@@ -83,6 +83,12 @@ asyncio.run(main())
 - `BLOCKING_IMPORTS` names modules a driver loads on its first poll that read files from
   disk (pysnmp for the SNMP driver). In an asyncio program that must not block, import
   them in a worker thread first, as Home Assistant does.
+- Drivers with `WATCHES = True` (MikroTik, experimental) also offer
+  `async_watch(on_change)`: it keeps the device's change feed open and calls
+  `on_change()` whenever the clients may have changed, so a program can poll at once
+  (instant arrivals). It runs until cancelled and raises `AccessPointError` when the
+  feed ends; nothing in the event is trusted, only the poll. `watch_key()` tells which
+  drivers share one watch (the CAPs of one CAPsMAN controller).
 - MAC addresses are upper case with colons; `normalize_mac()` converts other spellings.
 - Errors: `AccessPointAuthError` for rejected credentials, `AccessPointError` for
   everything else (unreachable, timeout, unexpected output).
@@ -104,6 +110,7 @@ Installed with the library:
 wifi-ap-probe --type openwrt_ssh --host 192.168.1.2 --username root
 wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
 wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01 --username ro --auth-protocol sha256  # v3
+wifi-ap-probe --type mikrotik_ssh --host 192.168.1.1 --username admin --watch  # follow changes
 wifi-ap-probe --list-types
 
 # Collect read-only, redacted data from an access point that has no driver yet

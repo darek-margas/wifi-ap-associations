@@ -42,6 +42,7 @@ clients of all its CAPs.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 import re
 from typing import Any
@@ -368,6 +369,8 @@ class MikroTikSsh(AccessPointDriver):
         {"name", "model", "firmware", "uptime_seconds", "cpu_percent", "memory_percent"}
     )
     SSH_POLICY = MIKROTIK_SSH_POLICY
+    # Instant arrivals: `registration-table print follow-only` (experimental).
+    WATCHES = True
     FIELDS = (
         DriverField("host"),
         DriverField("port", default=22),
@@ -385,6 +388,84 @@ class MikroTikSsh(AccessPointDriver):
 
     async def _run_all(self) -> dict[str, str]:
         return await run_commands(self.config, COMMANDS, self.SSH_POLICY)
+
+    async def async_watch(self, on_change: Callable[[], None]) -> None:
+        """Follow both Wi-Fi packages' registration tables (see watch_registrations)."""
+        await watch_registrations(
+            self.config, list(WATCH_COMMANDS.values()), self.SSH_POLICY, on_change
+        )
+
+
+# Long-running prints of each change of a registration table, for instant arrivals.
+WATCH_COMMANDS = {
+    "wifi": "/interface wifi registration-table print follow-only terse",
+    "wireless": "/interface wireless registration-table print follow-only terse",
+}
+# Dead connections are noticed within about a minute and a half.
+WATCH_KEEPALIVE = {"keepalive_interval": 30, "keepalive_count_max": 3}
+
+
+async def watch_registrations(
+    config: dict[str, Any],
+    commands: list[str],
+    policy: SshPolicy,
+    on_change: Callable[[], None],
+) -> None:
+    """Run `print follow-only` commands and call on_change() for each client line.
+
+    Every line naming a `mac-address=` means the table changed; nothing else in it is
+    used. A package that isn't installed ("bad command name") is skipped. Returns only
+    by raising: AccessPointError when every command is missing, or when one ends (the
+    device closed it) or the connection breaks; AccessPointAuthError for a rejected
+    login.
+    """
+    host = config["host"]
+    try:
+        async with asyncssh.connect(
+            host,
+            port=int(config.get("port") or 22),
+            username=config["username"],
+            password=config["password"],
+            **policy.connect_options(),
+            **WATCH_KEEPALIVE,
+        ) as conn:
+            pending = {
+                asyncio.ensure_future(_follow(conn, command, on_change)) for command in commands
+            }
+            try:
+                while pending:
+                    done, pending = await asyncio.wait(
+                        pending, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in done:
+                        if task.result() != "missing":
+                            raise AccessPointError(f"{host}: the change feed ended")
+                raise AccessPointError(f"{host}: no Wi-Fi registration table to watch")
+            finally:
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+    except asyncssh.PermissionDenied as err:
+        raise AccessPointAuthError(f"{host}: login rejected") from err
+    except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
+        raise AccessPointError(f"{host}: {err!r}") from err
+
+
+async def _follow(conn: Any, command: str, on_change: Callable[[], None]) -> str:
+    """Follow one command; "missing" if the device lacks its menu, "ended" if it stops."""
+    async with conn.create_process(command, encoding="utf-8", errors="replace") as process:
+        first = True
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                return "ended"
+            if not line.strip():
+                continue
+            if first and is_missing_menu(line):
+                return "missing"
+            first = False
+            if "mac-address=" in line:
+                on_change()
 
 
 async def run_commands(

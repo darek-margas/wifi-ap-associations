@@ -32,6 +32,7 @@ Confirmed on that controller in Home Assistant
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable
 from typing import Any
 
 from . import (
@@ -55,15 +56,19 @@ from .cisco_wlc import (
 from .mikrotik_ssh import (
     _LEADING_INT,
     MIKROTIK_SSH_POLICY,
+    WATCH_COMMANDS,
     band_name,
     is_missing_menu,
     parse_terse,
     parse_uptime,
     run_commands,
+    watch_registrations,
 )
 
 CONF_CAP = "cap"
-SHARE_SECONDS = 20
+# Short: the CAPs of one poll read together anyway, and a poll an instant-arrival event
+# triggers seconds after the last one must read the controller again.
+SHARE_SECONDS = 3
 COMMANDS = {
     "caps": "/interface wifi capsman remote-cap print terse",
     "interfaces": "/interface wifi print terse",
@@ -183,6 +188,8 @@ class MikroTikCapsmanSsh(AccessPointDriver):
     UNIQUE_FIELD = CONF_CAP
     IDENTITY_FIELDS = ("host", CONF_CAP)
     SSH_POLICY = MIKROTIK_SSH_POLICY
+    # Instant arrivals: one `print follow-only` on the controller for all its CAPs.
+    WATCHES = True
     FIELDS = (
         DriverField("host"),
         DriverField("port", default=22),
@@ -205,6 +212,21 @@ class MikroTikCapsmanSsh(AccessPointDriver):
         )
         data = await _shared.read(key, self._read_controller)
         return poll_result(data, str(self.config[CONF_CAP]).strip())
+
+    def watch_key(self) -> Hashable:
+        """One watch per controller, shared by its CAPs."""
+        return (
+            self.TYPE,
+            str(self.config["host"]).strip().casefold(),
+            int(self.config.get("port") or 22),
+            str(self.config["username"]),
+        )
+
+    async def async_watch(self, on_change: Callable[[], None]) -> None:
+        """Follow the controller's registration table (all CAPs' clients)."""
+        await watch_registrations(
+            self.config, [WATCH_COMMANDS["wifi"]], self.SSH_POLICY, on_change
+        )
 
     async def _read_controller(self) -> ControllerData:
         outputs: dict[str, Any] = await run_commands(self.config, COMMANDS, self.SSH_POLICY)
