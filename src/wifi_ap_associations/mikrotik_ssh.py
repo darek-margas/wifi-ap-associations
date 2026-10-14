@@ -412,8 +412,15 @@ WATCH_COMMANDS = {
     "wifi": "/interface wifi registration-table print follow-only terse",
     "wireless": "/interface wireless registration-table print follow-only terse",
 }
-# Dead connections are noticed within about a minute and a half.
-WATCH_KEEPALIVE = {"keepalive_interval": 30, "keepalive_count_max": 3}
+# RouterOS's SSH server doesn't answer the SSH keepalive (keepalive@openssh.com): with
+# it on, asyncssh dropped every watch after its three missed replies, two minutes in
+# (#11). It is off; instead the watch runs a cheap command on the same connection every
+# WATCH_CHECK_SECONDS, and a connection that doesn't answer it within
+# WATCH_CHECK_TIMEOUT is dead.
+WATCH_KEEPALIVE = {"keepalive_interval": 0}
+WATCH_CHECK_COMMAND = "/system identity print"
+WATCH_CHECK_SECONDS = 60
+WATCH_CHECK_TIMEOUT = 20
 # A client the last poll saw, printed again on the same interface within this long, is
 # no news: some clients re-authenticate every second or two, each time with a line.
 WATCH_REPEAT_SECONDS = 60
@@ -504,18 +511,24 @@ async def watch_registrations(
             # One filter for all commands: a roam may cross packages.
             changes = _ChangeFilter(present)
             _LOGGER.debug("%s: watching %s", host, ", ".join(commands))
-            pending = {
+            check = asyncio.ensure_future(_check_alive(conn, host))
+            follows = {
                 asyncio.ensure_future(_follow(conn, command, on_change, changes))
                 for command in commands
             }
+            pending = follows | {check}
             try:
-                while pending:
+                while pending & follows:
                     done, pending = await asyncio.wait(
                         pending, return_when=asyncio.FIRST_COMPLETED
                     )
-                    for task in done:
-                        if task.result() != "missing":
-                            raise AccessPointError(f"{host}: the change feed ended")
+                    # Read every finished task: a dropped connection fails them all at
+                    # once, and an exception left unread is logged as an error.
+                    errors = [task.exception() for task in done if task.exception()]
+                    if errors:
+                        raise errors[0]
+                    if any(task.result() != "missing" for task in done if task in follows):
+                        raise AccessPointError(f"{host}: the change feed ended")
                 raise AccessPointError(f"{host}: no Wi-Fi registration table to watch")
             finally:
                 for task in pending:
@@ -525,6 +538,23 @@ async def watch_registrations(
         raise AccessPointAuthError(f"{host}: login rejected") from err
     except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
         raise AccessPointError(f"{host}: {err!r}") from err
+
+
+async def _check_alive(conn: Any, host: str) -> None:
+    """Run a cheap command on the watch's connection now and then; raise once it stops
+    answering (the SSH keepalive can't be used, see WATCH_KEEPALIVE)."""
+    while True:
+        await asyncio.sleep(WATCH_CHECK_SECONDS)
+        started = time.monotonic()
+        try:
+            await asyncio.wait_for(
+                conn.run(WATCH_CHECK_COMMAND, check=False), WATCH_CHECK_TIMEOUT
+            )
+        except asyncio.TimeoutError as err:
+            raise AccessPointError(
+                f"{host}: the connection stopped answering"
+            ) from err
+        _LOGGER.debug("%s: watch connection answered in %.2f s", host, time.monotonic() - started)
 
 
 async def _follow(

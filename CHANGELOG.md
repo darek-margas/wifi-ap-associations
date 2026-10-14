@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.4
+
+From a tester's Home Assistant log
+([wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11)).
+
+- **The MikroTik watch no longer drops every two minutes.** RouterOS's SSH server
+  doesn't answer the SSH keepalive, so asyncssh closed the watch connection after three
+  missed replies ("Server not responding to keepalive"), and arrivals fell back to the
+  regular poll until it reconnected. The SSH keepalive is now off for the watch;
+  instead it runs `/system identity print` on the same connection every 60 s and treats
+  no answer within 20 s as a dead connection.
+- **No more "Task exception was never retrieved".** When the connection dropped, both
+  feeds (`wifi` and `wireless`) failed together and only one failure was read.
+
 ## 0.10.3
 
 From a review of 0.10.2 and a tester's report of arrivals taking 5 to 30 s

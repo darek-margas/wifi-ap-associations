@@ -25,6 +25,13 @@ class FakeConnection:
         self.feeds = feeds
         self.started: list[str] = []
         self.connect_kwargs: dict = {}
+        self.checks = 0
+        self.answers = True
+
+    async def run(self, command, **kwargs):
+        self.checks += 1
+        if not self.answers:
+            await asyncio.Event().wait()
 
     def connect(self, *args, **kwargs):
         self.connect_kwargs = kwargs
@@ -85,8 +92,8 @@ def test_each_client_line_asks_for_a_poll_until_the_feed_ends(monkeypatch) -> No
     # one poll of them); the header and the blank line count for nothing.
     assert len(changes) == 2
     assert set(fake.started) == set(WATCH_COMMANDS.values())
-    # A dead connection is noticed without waiting for TCP to give up.
-    assert fake.connect_kwargs["keepalive_interval"] == 30
+    # RouterOS doesn't answer the SSH keepalive: it must be off (see the check below).
+    assert fake.connect_kwargs["keepalive_interval"] == 0
 
 
 def test_no_registration_table_at_all_is_an_error(monkeypatch) -> None:
@@ -313,3 +320,72 @@ def test_lines_arrive_one_by_one_over_a_real_ssh_exec_stream() -> None:
     assert len(received_at) == 3
     # Each line within a fraction of the gap after it was sent.
     assert all(received - sent < gap * 0.8 for sent, received in zip(sent_at, received_at))
+
+
+# --- #11 in HA: RouterOS ignores the SSH keepalive; the watch checks the connection itself ---
+
+
+def test_a_quiet_watch_stays_up_while_the_connection_answers(monkeypatch) -> None:
+    from wifi_ap_associations import mikrotik_ssh
+
+    monkeypatch.setattr(mikrotik_ssh, "WATCH_CHECK_SECONDS", 0.01)
+    fake = install(monkeypatch, {WATCH_COMMANDS["wifi"]: [FOREVER], WATCH_COMMANDS["wireless"]: [FOREVER]})
+
+    async def main():
+        task = asyncio.ensure_future(MikroTikSsh(CONFIG).async_watch(lambda: None))
+        await asyncio.sleep(0.2)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    assert fake.checks >= 5
+
+
+def test_a_connection_that_stops_answering_ends_the_watch(monkeypatch) -> None:
+    from wifi_ap_associations import mikrotik_ssh
+
+    monkeypatch.setattr(mikrotik_ssh, "WATCH_CHECK_SECONDS", 0.01)
+    monkeypatch.setattr(mikrotik_ssh, "WATCH_CHECK_TIMEOUT", 0.05)
+    fake = install(monkeypatch, {WATCH_COMMANDS["wifi"]: [FOREVER], WATCH_COMMANDS["wireless"]: MISSING})
+    fake.answers = False
+    with pytest.raises(AccessPointError, match="stopped answering"):
+        asyncio.run(MikroTikSsh(CONFIG).async_watch(lambda: None))
+
+
+def test_both_feeds_failing_together_leave_no_unread_exception(monkeypatch) -> None:
+    import gc
+
+    import asyncssh
+
+    fake = install(monkeypatch, {WATCH_COMMANDS["wifi"]: [], WATCH_COMMANDS["wireless"]: []})
+
+    def create_process(command, **kwargs):
+        class Stdout:
+            async def readline(self):
+                raise asyncssh.ConnectionLost("Server not responding to keepalive")
+
+        class Process:
+            stdout = Stdout()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return Process()
+
+    fake.create_process = create_process
+    unread: list[dict] = []
+
+    async def main():
+        asyncio.get_running_loop().set_exception_handler(lambda loop, ctx: unread.append(ctx))
+        with pytest.raises(AccessPointError, match="keepalive"):
+            await MikroTikSsh(CONFIG).async_watch(lambda: None)
+        gc.collect()
+        await asyncio.sleep(0)
+
+    asyncio.run(main())
+    assert unread == []
