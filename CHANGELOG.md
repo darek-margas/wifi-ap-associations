@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.1
+
+Fixes from a review of the Cisco SNMP signal readings.
+
+- **Signal and connected time fall back field by field.** They come from two separate
+  tables, but a read that got one of them stored both as one reading: the other's last
+  value was dropped, and a fresh value made the missing one look recent. Each field now
+  keeps its own value and measurement time (`ClientReading.signal_read_at`,
+  `connected_read_at`) and falls back on its own, for at most 150 s.
+- **A failing signal or connected-time column no longer fails the read.** Only the AP
+  and client tables decide presence; an error walking one of the extra columns leaves
+  signal or connected time empty for that read instead of making the AP unavailable.
+  Rejected keys still fail it.
+
 ## 0.10.0
 
 - **Watching for changes (instant arrivals), experimental.** Drivers can say

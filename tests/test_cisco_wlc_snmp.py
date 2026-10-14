@@ -164,11 +164,12 @@ def test_v3_user_and_algorithms() -> None:
 class FakeAgent:
     """pysnmp's hlapi, answering walks from the fixture; counts engines and walks."""
 
-    def __init__(self, error: str | None = None) -> None:
+    def __init__(self, error: str | None = None, error_columns: set[str] | None = None) -> None:
         import pysnmp.hlapi.v3arch.asyncio as hlapi
 
         self.real = hlapi
         self.error = error
+        self.error_columns = error_columns  # None: every column fails
         self.engines = 0
         self.closed = 0
         self.walks: list[str] = []
@@ -207,7 +208,7 @@ class FakeAgent:
 
         async def bulk_walk_cmd(engine, auth, target, context, _n, _r, column, **kwargs):
             agent.walks.append(column)
-            if agent.error:
+            if agent.error and (agent.error_columns is None or column in agent.error_columns):
                 yield agent.error, 0, 0, []
                 return
             for oid, value in agent.by_column.get(column, []):
@@ -662,3 +663,58 @@ def test_real_pysnmp_reads_signal_from_a_local_agent(monkeypatch: pytest.MonkeyP
     ap01, ap02 = asyncio.run(main())
     assert (len(ap01.clients), len(ap02.clients)) == (15, 8)
     assert all(c.signal is not None and c.connected_seconds for c in [*ap01.clients, *ap02.clients])
+
+
+# --- review: signal and connected time fall back field by field; extras can fail ------
+
+
+def _without(clients: dict, key: str, mac: str) -> dict:
+    copy = {name: dict(column) for name, column in clients.items()}
+    copy[key].pop(mac, None)
+    return copy
+
+
+def test_each_field_falls_back_on_its_own() -> None:
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    mac = "02:00:00:00:00:12"  # -64 dBm, 7559 s
+    first = parse_columns(aps, clients, now=1000.0)
+    # Signal answered (changed), connected time missing: the old connected time stays.
+    clients["signal"][mac] = -60
+    second = parse_columns(aps, _without(clients, "connected", mac), first, now=1060.0)
+    client = next(c for c in second.clients if c.mac == mac)
+    assert (client.signal, client.connected_seconds) == (-60, 7559 + 60)
+    # The reverse: connected time answered, signal missing: the last signal stays.
+    third = parse_columns(aps, _without(clients, "signal", mac), second, now=1120.0)
+    client = next(c for c in third.clients if c.mac == mac)
+    assert (client.signal, client.connected_seconds) == (-60, 7559)
+
+
+def test_a_fresh_field_does_not_keep_a_missing_one_alive() -> None:
+    aps, clients = fixture_columns(SIGNAL_FIXTURE)
+    mac = "02:00:00:00:00:12"
+    data = parse_columns(aps, clients, now=1000.0)  # connected measured at 1000
+    without = _without(clients, "connected", mac)
+    for now in (1060.0, 1120.0, 1180.0):  # signal keeps coming, connected doesn't
+        data = parse_columns(aps, without, data, now=now)
+    client = next(c for c in data.clients if c.mac == mac)
+    assert client.signal == -64
+    assert client.connected_seconds is None  # 180 s since it was measured: too old
+
+
+def test_failing_extra_column_leaves_signal_empty_not_the_ap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wifi_ap_associations.cisco_wlc_snmp import EXTRA_COLUMNS
+
+    agent = FakeAgent(error="No SNMP response received before timeout",
+                      error_columns={EXTRA_COLUMNS["signal"], EXTRA_COLUMNS["connected"]})
+    agent.install(monkeypatch)
+    result = asyncio.run(CiscoWlcSnmp({**CONFIG, "ap_name": "AP01"}).async_poll())
+    assert len(result.clients) == 16  # presence intact
+    assert all(c.signal is None for c in result.clients)
+
+
+def test_failing_presence_column_still_fails_the_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    agent = FakeAgent(error="No SNMP response received before timeout",
+                      error_columns={CLIENT_COLUMNS["state"]})
+    agent.install(monkeypatch)
+    with pytest.raises(AccessPointError):
+        asyncio.run(CiscoWlcSnmp({**CONFIG, "ap_name": "AP01"}).async_poll())

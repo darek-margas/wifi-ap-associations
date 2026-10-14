@@ -60,7 +60,18 @@ class ClientReading:
     signal: int | None
     connected_seconds: int | None
     read_at: float
-    """time.monotonic() of the read."""
+    """time.monotonic() of the read (the latest, if the fields were measured apart)."""
+    signal_read_at: float | None = None
+    """When the signal was measured, if not at read_at (fields read separately)."""
+    connected_read_at: float | None = None
+    """When connected_seconds was measured, if not at read_at."""
+
+    def signal_age(self, now: float) -> float:
+        return now - (self.signal_read_at if self.signal_read_at is not None else self.read_at)
+
+    def connected_age(self, now: float) -> float:
+        at = self.connected_read_at if self.connected_read_at is not None else self.read_at
+        return now - at
 
 
 @dataclass(frozen=True, slots=True)

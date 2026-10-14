@@ -19,8 +19,10 @@ Cisco's client MIB, which the 9800 serves (confirmed on a C9800-CL with IOS-XE 1
           had grown by 795 for every client. (.14 holds when, but on a clock a day off.)
 
 Signal and connected time come for every client on every read; one a read misses is
-taken from the last measurement on the same AP while under READING_FALLBACK_SECONDS
-old (see parse_columns), then it is unknown. Which clients exist is
+taken from its own last measurement on the same AP while under
+READING_FALLBACK_SECONDS old (see parse_columns), then it is unknown. They are extras:
+an error walking their columns leaves them empty instead of failing the read, which
+only the AP and client tables can. Which clients exist is
 decided by the client table alone: the other two tables also hold rows for devices
 that aren't wireless clients, and those are ignored. SNMP v2c with a community, or v3
 with a user and keys, as the snmp_version setting says.
@@ -189,18 +191,32 @@ def parse_columns(
         connected = _int(clients.get("connected", {}).get(mac))
         if connected is not None and connected < 0:
             connected = None
-        if signal is not None or connected is not None:
-            readings[mac] = ClientReading(ap_name, signal, connected, now)
+        # Each field falls back on its own, to its own last measurement on this AP: a
+        # fresh signal neither drops nor rejuvenates a connected time the read missed.
+        last = readings.get(mac)
+        if last is not None and last.ap_name != ap_name:
+            last = None
+        signal_at: float | None = now if signal is not None else None
+        if signal is None and last is not None and last.signal is not None:
+            if last.signal_age(now) <= READING_FALLBACK_SECONDS:
+                signal, signal_at = last.signal, now - last.signal_age(now)
+        connected_at: float | None = now if connected is not None else None
+        if connected is None and last is not None and last.connected_seconds is not None:
+            if last.connected_age(now) <= READING_FALLBACK_SECONDS:
+                connected, connected_at = last.connected_seconds, now - last.connected_age(now)
+        if signal_at is None and connected_at is None:
+            readings.pop(mac, None)
         else:
-            reading = readings.get(mac)
-            if (
-                reading is not None
-                and reading.ap_name == ap_name
-                and now - reading.read_at <= READING_FALLBACK_SECONDS
-            ):
-                signal = reading.signal
-                if reading.connected_seconds is not None:
-                    connected = reading.connected_seconds + int(now - reading.read_at)
+            readings[mac] = ClientReading(
+                ap_name,
+                signal,
+                connected,
+                max(at for at in (signal_at, connected_at) if at is not None),
+                signal_read_at=signal_at,
+                connected_read_at=connected_at,
+            )
+        if connected is not None and connected_at is not None:
+            connected += int(now - connected_at)  # carried forward from its measurement
         found.append(
             ControllerClient(
                 mac=mac,
@@ -341,11 +357,23 @@ class CiscoWlcSnmp(AccessPointDriver):
             raise AccessPointError(f"{host}: {err}") from err
         finally:
             engine.close_dispatcher()
-        if errors := [result for result in walked if isinstance(result, BaseException)]:
+        # Presence needs the AP and client tables: an error there fails the read. Signal
+        # and connected time are extras: an error walking them only leaves them empty.
+        required = {*AP_COLUMNS.values(), *CLIENT_COLUMNS.values()}
+        errors = [
+            result
+            for oid, result in zip(columns, walked)
+            if isinstance(result, BaseException)
+            and (oid in required or isinstance(result, AccessPointAuthError))
+        ]
+        if errors:
             # Rejected keys first: they tell the user what to fix.
             auth = [e for e in errors if isinstance(e, AccessPointAuthError)]
             raise (auth or errors)[0]
-        values = dict(zip(columns, walked))
+        values = {
+            oid: {} if isinstance(result, BaseException) else result
+            for oid, result in zip(columns, walked)
+        }
         data = parse_columns(
             {name: values[oid] for name, oid in AP_COLUMNS.items()},
             {name: values[oid] for name, oid in {**CLIENT_COLUMNS, **EXTRA_COLUMNS}.items()},
