@@ -112,6 +112,8 @@ PROFILES: dict[str, list[str]] = {
         "/interface wifi print terse",
         "/interface wireless print terse",
         "/interface wireless registration-table print terse",
+        # Signal and uptime of the wireless package are only shown with `stats`.
+        "/interface wireless registration-table print stats terse",
         "/interface wifi registration-table print terse",
         "/interface wifiwave2 registration-table print terse",
         "/caps-man registration-table print terse",

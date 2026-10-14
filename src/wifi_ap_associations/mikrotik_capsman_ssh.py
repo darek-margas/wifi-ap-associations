@@ -172,7 +172,8 @@ class MikroTikCapsmanSsh(AccessPointDriver):
     """One CAP of a MikroTik CAPsMAN controller (RouterOS 7, wifi package), over SSH."""
 
     TYPE = "mikrotik_capsman_ssh"
-    NAME = "MikroTik CAPsMAN controller (SSH)"
+    # Added once per CAP, so named for the CAP rather than the controller.
+    NAME = "MikroTik CAP via CAPsMAN (SSH)"
     MANUFACTURER = "MikroTik"
     SIGNAL_UNIT = "dBm"
     EXPERIMENTAL = True

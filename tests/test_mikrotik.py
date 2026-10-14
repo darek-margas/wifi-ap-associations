@@ -67,6 +67,7 @@ def outputs(**overrides: str) -> dict[str, str]:
         "wifi_clients": "",
         "wireless_interfaces": BAD_WIRELESS,
         "wireless_clients": BAD_WIRELESS,
+        "wireless_stats": BAD_WIRELESS,
     }
     return {**base, **overrides}
 
@@ -76,7 +77,7 @@ def test_registered_as_experimental() -> None:
     assert MikroTikSsh.EXPERIMENTAL is True
     assert set(COMMANDS) == {
         "identity", "resource", "wifi_interfaces", "wifi_clients",
-        "wireless_interfaces", "wireless_clients",
+        "wireless_interfaces", "wireless_clients", "wireless_stats",
     }
 
 
@@ -299,3 +300,57 @@ def test_master_interface_loop_does_not_hang() -> None:
         {"name": "b", "master-interface": "a"},
     ]
     assert parse_interfaces(records) == {"a": (None, None), "b": (None, None)}
+
+
+# --- wireless package: signal and uptime only with `print stats terse` (#11) ----------
+
+# As a cAP lite on RouterOS 7.24.4 answers: no signal, no uptime in plain terse.
+PLAIN_WIRELESS = (
+    "0 interface=wlan33 mac-address=5C:AD:BA:00:00:06 ap=no wds=no bridge=no\n"
+    "1 interface=wlan31 mac-address=5C:AD:BA:00:00:07 ap=no wds=no bridge=no\n"
+)
+STATS_WIRELESS = (
+    "0 interface=wlan33 mac-address=5C:AD:BA:00:00:06 ap=no wds=no bridge=no"
+    " rx-rate=1Mbps tx-rate=57.7Mbps-20MHz/1S/SGI uptime=4h8m35s last-activity=0ms"
+    " signal-strength=-68dBm@1Mbps signal-to-noise=27dB\n"
+    "1 interface=wlan31 mac-address=5C:AD:BA:00:00:07 ap=no wds=no bridge=no"
+    " uptime=2h15m18s signal-strength=-55dBm@12Mbps\n"
+)
+WLAN_INTERFACES = (
+    " 0 R name=wlan33 mac-address=04:F4:1C:00:00:40 ssid=Mgmt band=2ghz-b/g/n mode=ap-bridge\n"
+    " 1 R name=wlan31 mac-address=04:F4:1C:00:00:41 ssid=Untrusted band=5ghz-a/n/ac mode=ap-bridge\n"
+)
+
+
+def _wireless(stats: str) -> list:
+    return parse_poll(
+        outputs(
+            wifi_interfaces="", wifi_clients="",
+            wireless_interfaces=WLAN_INTERFACES, wireless_clients=PLAIN_WIRELESS,
+            wireless_stats=stats,
+        )
+    ).clients
+
+
+def test_wireless_signal_and_uptime_come_from_print_stats() -> None:
+    first, second = _wireless(STATS_WIRELESS)
+    assert (first.mac, first.ssid, first.band, first.signal) == ("5C:AD:BA:00:00:06", "Mgmt", "2.4GHz", -68)
+    assert first.connected_seconds == 4 * 3600 + 8 * 60 + 35
+    assert (second.band, second.signal) == ("5GHz", -55)
+
+
+@pytest.mark.parametrize(
+    "stats",
+    ["expected end of command (line 1 column 43)\n", "", BAD_WIRELESS, "0 interface=wlan33 mac-address=nope\n"],
+)
+def test_no_usable_stats_changes_nothing(stats: str) -> None:
+    clients = _wireless(stats)
+    assert [c.mac for c in clients] == ["5C:AD:BA:00:00:06", "5C:AD:BA:00:00:07"]
+    assert all(c.signal is None and c.connected_seconds is None for c in clients)
+
+
+def test_capsman_type_is_named_for_the_cap() -> None:
+    from wifi_ap_associations.mikrotik_capsman_ssh import MikroTikCapsmanSsh
+
+    assert MikroTikCapsmanSsh.TYPE == "mikrotik_capsman_ssh"  # stored: unchanged
+    assert MikroTikCapsmanSsh.NAME == "MikroTik CAP via CAPsMAN (SSH)"

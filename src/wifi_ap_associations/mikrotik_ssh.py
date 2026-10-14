@@ -19,7 +19,9 @@ System details, as RouterOS 7.20 prints them (confirmed on a CRS310):
 
 Clients come from the registration tables of the Wi-Fi packages the device has:
 `/interface wifi` (RouterOS 7, also called wifiwave2) and `/interface wireless`
-(RouterOS 6 and older 7 devices). Both are read and their clients merged: recent
+(RouterOS 6 and older 7 devices). The `wireless` package's plain `print terse` has no
+signal or uptime; they come from `print stats terse`, matched by MAC, when the device
+answers it (presence never depends on it). Both packages are read and their clients merged: recent
 RouterOS ships the `wifi` package built in, so its menu answers (with nothing) even on
 a device whose radios all run `wireless` (seen on a cAP lite with RouterOS 7.24.4). `print terse` gives one client per line as
 `key=value` pairs, e.g. (column names as MikroTik's WiFi manual lists them, not yet confirmed on a
@@ -40,6 +42,7 @@ clients of all its CAPs.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import re
 from typing import Any
 
@@ -93,6 +96,9 @@ COMMANDS = {
     "wifi_clients": "/interface wifi registration-table print terse",
     "wireless_interfaces": "/interface wireless print terse",
     "wireless_clients": "/interface wireless registration-table print terse",
+    # The wireless package leaves signal and uptime out of a plain `print terse`
+    # (only interface, MAC, ap, wds, bridge); `stats` adds them.
+    "wireless_stats": "/interface wireless registration-table print stats terse",
 }
 
 # RouterOS's answer to a menu that doesn't exist (the package isn't installed).
@@ -262,6 +268,43 @@ def parse_clients(
     return clients
 
 
+def with_wireless_stats(
+    clients: list[AssociatedClient], output: str
+) -> list[AssociatedClient]:
+    """Signal and connected time from `wireless registration-table print stats terse`.
+
+    Matched by MAC and only filled where the plain table left them empty; an answer
+    that isn't a table (an error, an older RouterOS) changes nothing.
+    """
+    if is_missing_menu(output):
+        return clients
+    stats = {}
+    for record in parse_terse(output):
+        try:
+            stats[normalize_mac(record.get("mac-address", ""))] = record
+        except ValueError:
+            continue
+    merged = []
+    for client in clients:
+        record = stats.get(client.mac)
+        if record is not None:
+            strength = record.get("signal-strength") or record.get("signal")
+            match = _LEADING_INT.match(strength) if strength else None
+            client = replace(
+                client,
+                signal=client.signal if client.signal is not None else (
+                    int(match.group(1)) if match else None
+                ),
+                connected_seconds=(
+                    client.connected_seconds
+                    if client.connected_seconds is not None
+                    else parse_uptime(record.get("uptime"))
+                ),
+            )
+        merged.append(client)
+    return merged
+
+
 def parse_poll(outputs: dict[str, str]) -> PollResult:
     """Clients and device details from the outputs of COMMANDS (keyed like COMMANDS).
 
@@ -285,7 +328,10 @@ def parse_poll(outputs: dict[str, str]) -> PollResult:
         if table.strip() and not records:
             raise AccessPointError(f"Could not read the {package} registration table")
         interfaces = parse_interfaces(parse_terse(outputs.get(f"{package}_interfaces", "")))
-        for client in parse_clients(records, interfaces, authorized_only=package == "wifi"):
+        found = parse_clients(records, interfaces, authorized_only=package == "wifi")
+        if package == "wireless":
+            found = with_wireless_stats(found, outputs.get("wireless_stats", ""))
+        for client in found:
             if client.mac not in seen:
                 seen.add(client.mac)
                 clients.append(client)

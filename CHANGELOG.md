@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.1
+
+Follow-ups from the CAPsMAN tester
+([wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11)).
+
+- **MikroTik, `wireless` package: signal and connected time.** On RouterOS 7.24.4
+  `/interface wireless registration-table print terse` lists only interface, MAC,
+  `ap`, `wds` and `bridge`: no signal, no uptime. `mikrotik_ssh` now also runs
+  `print stats terse` and takes `signal-strength` and `uptime` from it, matched by MAC.
+  Presence still comes from the plain table; if the device doesn't answer `stats`
+  (an error, an older RouterOS), nothing changes. The collector's `mikrotik` list
+  includes the command too.
+- **`mikrotik_capsman_ssh` is named "MikroTik CAP via CAPsMAN (SSH)"**: it is added once
+  per CAP, and MikroTik doesn't call CAPsMAN a controller. Its `TYPE` stays the same, so
+  stored configurations are unaffected.
+
 ## 0.9.0
 
 - **New driver `mikrotik_capsman_ssh` (experimental): MikroTik CAPsMAN controllers**
