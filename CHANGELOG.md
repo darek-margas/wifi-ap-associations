@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3
+
+- **`mikrotik_ssh` and `mikrotik_capsman_ssh` are no longer experimental.** Confirmed
+  in Home Assistant by a tester on RouterOS 7.24.4: a cAP lite with the `wireless`
+  package (clients, SSID, band, signal and connected time) and a CAPsMAN controller
+  with two cAP ax on the `wifi` package (each client on its CAP)
+  ([wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11),
+  [#12](https://github.com/darek-margas/wifi-association-presence/issues/12)).
+
 ## 0.9.2
 
 - **MikroTik `wireless` signal, now actually read.** 0.9.1 asked for

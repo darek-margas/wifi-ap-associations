@@ -40,7 +40,7 @@ CONFIG = {"host": "192.0.2.1", "port": 22, "username": "ha", "password": "x"}
 
 def test_registered_as_experimental_per_cap() -> None:
     assert DRIVERS["mikrotik_capsman_ssh"] is MikroTikCapsmanSsh
-    assert MikroTikCapsmanSsh.EXPERIMENTAL is True
+    assert MikroTikCapsmanSsh.EXPERIMENTAL is False  # confirmed in #11
     assert [f.key for f in MikroTikCapsmanSsh.FIELDS] == ["host", "port", "username", "password", "cap"]
     assert set(COMMANDS.values()) == {
         "/interface wifi capsman remote-cap print terse",

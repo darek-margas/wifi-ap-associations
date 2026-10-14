@@ -74,7 +74,7 @@ def outputs(**overrides: str) -> dict[str, str]:
 
 def test_registered_as_experimental() -> None:
     assert DRIVERS["mikrotik_ssh"] is MikroTikSsh
-    assert MikroTikSsh.EXPERIMENTAL is True
+    assert MikroTikSsh.EXPERIMENTAL is False  # confirmed in #11 and #12
     assert set(COMMANDS) == {
         "identity", "resource", "wifi_interfaces", "wifi_clients",
         "wireless_interfaces", "wireless_clients", "wireless_stats",

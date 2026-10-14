@@ -26,7 +26,8 @@ without the A (authorized) flag are still joining and don't count. Interface nam
 contain spaces ("ap_upstairs 2").
 
 The legacy CAPsMAN of the `wireless` package (`/caps-man`, RouterOS 6) isn't covered.
-EXPERIMENTAL until a tester confirms it on a real controller.
+Confirmed on that controller in Home Assistant
+(darek-margas/wifi-association-presence#11).
 """
 
 from __future__ import annotations
@@ -176,7 +177,6 @@ class MikroTikCapsmanSsh(AccessPointDriver):
     NAME = "MikroTik CAP via CAPsMAN (SSH)"
     MANUFACTURER = "MikroTik"
     SIGNAL_UNIT = "dBm"
-    EXPERIMENTAL = True
     # From the controller's remote CAP list; CAPs report no CPU, memory or location there.
     REPORTS = frozenset({"name", "model", "firmware", "uptime_seconds"})
     # Many CAPs share one controller; the CAP's identity tells them apart.

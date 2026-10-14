@@ -24,8 +24,8 @@ signal or uptime; they come from `print stats terse`, matched by MAC, when the d
 answers it (presence never depends on it). Both packages are read and their clients merged: recent
 RouterOS ships the `wifi` package built in, so its menu answers (with nothing) even on
 a device whose radios all run `wireless` (seen on a cAP lite with RouterOS 7.24.4). `print terse` gives one client per line as
-`key=value` pairs, e.g. (column names as MikroTik's WiFi manual lists them, not yet confirmed on a
-real access point, hence EXPERIMENTAL):
+`key=value` pairs, e.g. (confirmed on a cAP lite with the `wireless` package and on a
+CAPsMAN controller with the `wifi` package, both RouterOS 7.24.4):
 
     0 interface=wifi1 ssid=Home mac-address=5C:AD:BA:00:00:01 uptime=1h2m3s
       signal=-55 band=5ghz-ax ...
@@ -363,7 +363,6 @@ class MikroTikSsh(AccessPointDriver):
     NAME = "MikroTik RouterOS (SSH)"
     MANUFACTURER = "MikroTik"
     SIGNAL_UNIT = "dBm"
-    EXPERIMENTAL = True
     # RouterOS has no location setting in /system identity.
     REPORTS = frozenset(
         {"name", "model", "firmware", "uptime_seconds", "cpu_percent", "memory_percent"}
