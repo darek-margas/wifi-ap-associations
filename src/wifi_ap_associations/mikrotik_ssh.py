@@ -107,6 +107,9 @@ _BAD_COMMAND = re.compile(r"^(bad command name|syntax error|no such command)", r
 # space. Values can contain spaces ("comment=Uplink to switch"), so a value runs until
 # the next key.
 _TERSE_KEY = re.compile(r"(?:(?<=\s)|^)([a-z][a-z0-9.-]*)=")
+# A record's first line starts with its row number; `print stats terse` continues a
+# record on indented lines without one.
+_ROW_START = re.compile(r"^\s*\d+(\s|$)")
 _UPTIME_PART = re.compile(r"(\d+)(ms|w|d|h|m|s)")
 _UPTIME_SECONDS = {"w": 604800, "d": 86400, "h": 3600, "m": 60, "s": 1, "ms": 0}
 _SIZE = re.compile(r"^\s*([\d.]+)\s*([KMGT]?i?B)?\s*$")
@@ -136,17 +139,31 @@ def parse_terse(output: str) -> list[dict[str, str]]:
     """One dict per `print terse` record.
 
     The leading row number is dropped; the flag letters before the first key (e.g. "RS",
-    or "A" for an authorized client) are kept under the key "_flags".
+    or "A" for an authorized client) are kept under the key "_flags". A record may go
+    on over indented lines without a row number (`print stats terse` does that, putting
+    e.g. `uptime` and `signal-strength` on the second line); they are joined to it.
+    Values in double quotes (`rx-rate="6Mbps"`) lose the quotes.
     """
-    records = []
+    lines: list[str] = []
     for line in output.splitlines():
+        if not line.strip():
+            continue
+        if lines and line[:1].isspace() and not _ROW_START.match(line):
+            lines[-1] += " " + line.strip()
+        else:
+            lines.append(line)
+    records = []
+    for line in lines:
         keys = list(_TERSE_KEY.finditer(line))
         if not keys:
             continue
         record = {"_flags": "".join(ch for ch in line[: keys[0].start()] if ch.isalpha())}
         for match, following in zip(keys, [*keys[1:], None]):
             end = following.start() if following else len(line)
-            record[match.group(1)] = line[match.end() : end].strip()
+            value = line[match.end() : end].strip()
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+            record[match.group(1)] = value
         records.append(record)
     return records
 

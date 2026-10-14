@@ -354,3 +354,33 @@ def test_capsman_type_is_named_for_the_cap() -> None:
 
     assert MikroTikCapsmanSsh.TYPE == "mikrotik_capsman_ssh"  # stored: unchanged
     assert MikroTikCapsmanSsh.NAME == "MikroTik CAP via CAPsMAN (SSH)"
+
+
+# What `/interface wireless registration-table print stats terse` really prints on a cAP
+# lite (RouterOS 7.24.4, #11): one client over several lines, quoted values.
+REAL_STATS = """\
+0  interface=wlan33 mac-address=5C:AD:BA:00:00:06 ap=no wds=no bridge=no rx-rate="6Mbps" tx-rate="65Mbps-20MHz/1S/SGI" packets=904,2383 bytes=83404,207493 frames=904,2408
+   frame-bytes=86348,196129 hw-frames=2085,5640 hw-frame-bytes=283641,369985 tx-frames-timed-out=0 uptime=1h52m19s last-activity=1s100ms signal-strength=-68dBm@1Mbps
+   signal-to-noise=42dB signal-strength-ch0=-78dBm signal-strength-ch1=-68dBm
+   strength-at-rates=-68dBm@1Mbps 39s360ms,-65dBm@6Mbps 1s100ms,-67dBm@HT20-4 6s500ms,-65dBm@HT20-5 29s260ms,-66dBm@HT20-6 31s770ms,-67dBm@HT20-7 1m31s760ms tx-ccq=82%
+   p-throughput=54863 distance=7 last-ip=IP 802.1x-port-enabled=yes authentication-type=wpa2-psk encryption=aes-ccm group-encryption=aes-ccm management-protection=no
+   wmm-enabled=yes tx-rate-set="OFDM:12-54 BW:1x SGI:1x HT:0-7" vlan-id=33
+1  interface=wlan31 mac-address=5C:AD:BA:00:00:07 ap=no wds=no bridge=no
+   uptime=2h15m18s signal-strength=-55dBm@12Mbps
+"""
+
+
+def test_print_stats_terse_records_over_several_lines() -> None:
+    first, second = parse_terse(REAL_STATS)
+    assert first["mac-address"] == "5C:AD:BA:00:00:06"
+    assert (first["uptime"], first["signal-strength"]) == ("1h52m19s", "-68dBm@1Mbps")
+    assert first["rx-rate"] == "6Mbps"  # quotes removed
+    assert first["tx-rate-set"] == "OFDM:12-54 BW:1x SGI:1x HT:0-7"
+    assert first["vlan-id"] == "33"
+    assert (second["mac-address"], second["signal-strength"]) == ("5C:AD:BA:00:00:07", "-55dBm@12Mbps")
+
+
+def test_real_wireless_stats_give_signal_and_uptime() -> None:
+    first, second = _wireless(REAL_STATS)
+    assert (first.signal, first.connected_seconds) == (-68, 3600 + 52 * 60 + 19)
+    assert (second.signal, second.connected_seconds) == (-55, 2 * 3600 + 15 * 60 + 18)

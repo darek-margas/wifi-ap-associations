@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.2
+
+- **MikroTik `wireless` signal, now actually read.** 0.9.1 asked for
+  `registration-table print stats terse`, but RouterOS prints each client of it over
+  several lines: the first has the MAC, the indented ones after it hold `uptime` and
+  `signal-strength`. The terse parser read every line as its own record, so the signal
+  was never matched to its client. It now joins indented lines without a row number to
+  the record they continue, and drops the quotes around quoted values
+  (`rx-rate="6Mbps"`). Tested on the output of a cAP lite on RouterOS 7.24.4
+  ([wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11)).
+
 ## 0.9.1
 
 Follow-ups from the CAPsMAN tester
