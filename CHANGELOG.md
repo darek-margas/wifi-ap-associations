@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2
+
+- **MikroTik watch: only arrivals and roams.** A tester's `print follow-only` capture
+  (RouterOS 7.24.4, [wifi-association-presence#11](https://github.com/darek-margas/wifi-association-presence/issues/11))
+  showed a line for every join and roam, nothing on leaving, and a line every second or
+  two for a client that keeps re-authenticating; in the `wifi` package a joining client
+  appears first without the A (authorized) flag. `on_change()` is now called only for
+  an authorized client line (`wifi`; every client line of `wireless`, which has no
+  flags) of a client that is new, on another interface than last time, or last seen
+  over 60 s ago. Before, each line asked for a poll: a flapping client meant one every
+  few seconds, and a poll on the unauthorized line came too early to count the client.
+
 ## 0.10.1
 
 Fixes from a review of the Cisco SNMP signal readings.

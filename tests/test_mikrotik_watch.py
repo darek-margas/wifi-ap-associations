@@ -81,7 +81,8 @@ def test_each_client_line_asks_for_a_poll_until_the_feed_ends(monkeypatch) -> No
     changes: list[int] = []
     with pytest.raises(AccessPointError, match="ended"):
         asyncio.run(MikroTikSsh(CONFIG).async_watch(lambda: changes.append(1)))
-    assert len(changes) == 2  # the two client lines, not the header or blank line
+    # The same client twice in a row is one change; header and blank line are none.
+    assert len(changes) == 1
     assert set(fake.started) == set(WATCH_COMMANDS.values())
     # A dead connection is noticed without waiting for TCP to give up.
     assert fake.connect_kwargs["keepalive_interval"] == 30
@@ -142,3 +143,61 @@ def test_only_watching_drivers_watch() -> None:
     openwrt = DRIVERS["openwrt_ssh"](CONFIG)
     with pytest.raises(NotImplementedError):
         asyncio.run(openwrt.async_watch(lambda: None))
+
+
+# --- what follow-only really prints (RouterOS 7.24.4, #11); MACs made up --------------
+
+M1, M2 = "5C:AD:BA:00:00:01", "5C:AD:BA:00:00:02"
+FOOTER = "-- Ctrl-C to quit. Space prints separator. New entries will appear at bottom.\n"
+
+
+def line(mac: str, interface: str, authorized: bool = True) -> str:
+    flags = " A " if authorized else "   "
+    return (f"{flags}comment=management interface={interface} ssid=SSID mac-address={mac} "
+            f"uptime=0s signal=-61 auth-type=wpa2-psk-sha2 band=2ghz-n vlan-id=33 \n")
+
+
+# M2 roams downstairs -> upstairs -> back; M1 joins (unauthorized first), roams, and then
+# keeps re-authenticating on the same interface, as the tester's capture shows.
+ROAMS = [
+    line(M2, "ap_downstairs 2"),
+    line(M2, "ap_upstairs "),
+    line(M1, "ap_upstairs 2", authorized=False),
+    line(M1, "ap_upstairs 2"),
+    line(M1, "ap_downstairs 2", authorized=False),
+    line(M1, "ap_downstairs 2"),
+    line(M2, "ap_upstairs 2"),
+    line(M2, "ap_downstairs "),
+    line(M1, "ap_upstairs 2", authorized=False),
+    line(M1, "ap_upstairs 2"),
+    *[line(M1, "ap_upstairs 2", authorized=a) for a in (True, False) * 10],
+    FOOTER,
+]
+
+
+def test_real_capture_polls_for_arrivals_and_roams_not_for_flapping(monkeypatch) -> None:
+    install(monkeypatch, {WATCH_COMMANDS["wifi"]: ROAMS, WATCH_COMMANDS["wireless"]: MISSING})
+    changes: list[int] = []
+    with pytest.raises(AccessPointError):
+        asyncio.run(MikroTikSsh(CONFIG).async_watch(lambda: changes.append(1)))
+    # M2: 4 interfaces; M1: joined, roamed, roamed back; then 20 re-authentications: none.
+    assert len(changes) == 7
+
+
+def test_wireless_lines_have_no_flags_and_count(monkeypatch) -> None:
+    plain = "interface=wlan33 mac-address=5C:AD:BA:00:00:03 ap=no wds=no bridge=no \n"
+    install(monkeypatch, {WATCH_COMMANDS["wifi"]: [], WATCH_COMMANDS["wireless"]: [plain, plain, plain]})
+    changes: list[int] = []
+    with pytest.raises(AccessPointError):
+        asyncio.run(MikroTikSsh(CONFIG).async_watch(lambda: changes.append(1)))
+    assert len(changes) == 1  # the same client three times in a row: one poll
+
+
+def test_same_client_counts_again_after_a_while(monkeypatch) -> None:
+    from wifi_ap_associations import mikrotik_ssh
+
+    flt = mikrotik_ssh._ChangeFilter()
+    one = line(M1, "ap_upstairs 2")
+    assert flt.wanted(one, True, 0.0)
+    assert not flt.wanted(one, True, 30.0)
+    assert flt.wanted(one, True, 30.0 + mikrotik_ssh.WATCH_REPEAT_SECONDS)

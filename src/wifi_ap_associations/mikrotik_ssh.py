@@ -45,6 +45,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import replace
 import re
+import time
 from typing import Any
 
 import asyncssh
@@ -403,6 +404,46 @@ WATCH_COMMANDS = {
 }
 # Dead connections are noticed within about a minute and a half.
 WATCH_KEEPALIVE = {"keepalive_interval": 30, "keepalive_count_max": 3}
+# A client seen again on the same interface within this long is no news: some clients
+# re-authenticate every second or two, and each time follow-only prints a line.
+WATCH_REPEAT_SECONDS = 60
+
+
+class _ChangeFilter:
+    """Which follow-only lines are worth a poll: an arrival or a roam, once.
+
+    Seen on RouterOS 7.24.4 (#11): a joining client prints a line, a roam prints one
+    for the new interface, leaving prints nothing, and a client that keeps
+    re-authenticating prints a line each time. In the `wifi` package a client shows
+    first without the A (authorized) flag and a moment later with it; polling on the
+    first line would find it not yet counted, so only authorized lines count there.
+    The `wireless` package prints no flags. A client counts again when it is on another
+    interface (a roam) or after WATCH_REPEAT_SECONDS.
+    """
+
+    def __init__(self) -> None:
+        self._seen: dict[str, tuple[str, float]] = {}
+
+    def wanted(self, line: str, authorized_only: bool, now: float) -> bool:
+        if "mac-address=" not in line:
+            return False
+        records = parse_terse(line)
+        if not records:
+            return True  # a client line that can't be read: poll anyway
+        record = records[0]
+        if authorized_only and "A" not in record.get("_flags", ""):
+            return False
+        raw = record.get("mac-address", "")
+        try:
+            mac = normalize_mac(raw)
+        except ValueError:
+            mac = raw
+        interface = record.get("interface", "")
+        last = self._seen.get(mac)
+        if last is not None and last[0] == interface and now - last[1] < WATCH_REPEAT_SECONDS:
+            return False
+        self._seen[mac] = (interface, now)
+        return True
 
 
 async def watch_registrations(
@@ -411,10 +452,10 @@ async def watch_registrations(
     policy: SshPolicy,
     on_change: Callable[[], None],
 ) -> None:
-    """Run `print follow-only` commands and call on_change() for each client line.
+    """Run `print follow-only` commands and call on_change() for arrivals and roams.
 
-    Every line naming a `mac-address=` means the table changed; nothing else in it is
-    used. A package that isn't installed ("bad command name") is skipped. Returns only
+    Lines naming a `mac-address=` are filtered by _ChangeFilter (an authorized client
+    new or on another interface); nothing else in them is used. A package that isn't installed ("bad command name") is skipped. Returns only
     by raising: AccessPointError when every command is missing, or when one ends (the
     device closed it) or the connection breaks; AccessPointAuthError for a rejected
     login.
@@ -429,8 +470,10 @@ async def watch_registrations(
             **policy.connect_options(),
             **WATCH_KEEPALIVE,
         ) as conn:
+            changes = _ChangeFilter()  # one for all commands: a roam may cross packages
             pending = {
-                asyncio.ensure_future(_follow(conn, command, on_change)) for command in commands
+                asyncio.ensure_future(_follow(conn, command, on_change, changes))
+                for command in commands
             }
             try:
                 while pending:
@@ -451,8 +494,11 @@ async def watch_registrations(
         raise AccessPointError(f"{host}: {err!r}") from err
 
 
-async def _follow(conn: Any, command: str, on_change: Callable[[], None]) -> str:
+async def _follow(
+    conn: Any, command: str, on_change: Callable[[], None], changes: _ChangeFilter
+) -> str:
     """Follow one command; "missing" if the device lacks its menu, "ended" if it stops."""
+    authorized_only = command == WATCH_COMMANDS["wifi"]
     async with conn.create_process(command, encoding="utf-8", errors="replace") as process:
         first = True
         while True:
@@ -464,7 +510,7 @@ async def _follow(conn: Any, command: str, on_change: Callable[[], None]) -> str
             if first and is_missing_menu(line):
                 return "missing"
             first = False
-            if "mac-address=" in line:
+            if changes.wanted(line, authorized_only, time.monotonic()):
                 on_change()
 
 
