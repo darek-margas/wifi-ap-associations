@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.0
+
+- **The presence rules move into the library**, from the Home Assistant integration, so
+  other programs (an MQTT bridge first) decide home and away the same way:
+  - `wifi_ap_associations.presence`: merging a poll round into sightings (stronger
+    signal wins), grace period, visits, retention, storage. Moved unchanged, except
+    that `AccessPointRead` names its first field `access_point_id` (was `subentry_id`).
+  - `wifi_ap_associations.coverage`: roams, short drops and late roams per device and
+    day, client signal per access point. Moved unchanged.
+  - `wifi_ap_associations.tracker` (new): `PresenceTracker`, the state the
+    integration's coordinator kept between polls (sightings with visits, access point
+    states, coverage, riding out a short total outage, storage and restore);
+    `poll_all()`; `watch_forever()`, the instant-arrival retry loop.
+- The integration's tests of those rules moved here with them (70), plus 13 for the
+  tracker and the loops. Stored data keeps its format: what the integration saved
+  before loads unchanged.
+
 ## 0.11.2
 
 - **New driver `omada_network`, experimental: TP-Link Omada access points** through an

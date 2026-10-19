@@ -12,8 +12,10 @@ minutes.
 This is the library behind the Home Assistant integration
 [Wi-Fi Association Presence](https://github.com/darek-margas/wifi-association-presence),
 but it has no Home Assistant imports and works in any asyncio program: a network
-inventory, an exporter for Prometheus, your own scripts. An MQTT bridge built on it, as
-a container for Node-RED and other MQTT users, is an idea on the integration's
+inventory, an exporter for Prometheus, your own scripts. It also carries that
+integration's presence rules (who is home, on which access point, since when), so
+another program decides home and away exactly as the integration does; an MQTT bridge
+built on it, as a container for Node-RED and other MQTT users, is on the integration's
 [roadmap](https://github.com/darek-margas/wifi-association-presence#roadmap).
 
 ## Supported access points
@@ -158,6 +160,67 @@ report = await async_collect_ssh_report(
 
 It returns the report text with the review warning on top, and raises
 `AccessPointAuthError` / `AccessPointError` like the drivers.
+
+## Presence across polls
+
+The Home Assistant integration's presence rules are in this library, so any program can
+use them: `wifi_ap_associations.presence` (merging a poll round, the grace period,
+visits, storage), `wifi_ap_associations.coverage` (roams, short drops, late roams,
+signal per access point) and `wifi_ap_associations.tracker`, which keeps the state
+between polls:
+
+```python
+import asyncio
+from datetime import datetime, timedelta, UTC
+
+from wifi_ap_associations import DRIVERS
+from wifi_ap_associations.presence import AccessPointRead
+from wifi_ap_associations.tracker import AllAccessPointsFailed, PresenceTracker, poll_all
+
+aps = {
+    "hall": DRIVERS["openwrt_ssh"]({"host": "192.168.1.2", "username": "root", "password": "x"}),
+    "den": DRIVERS["mikrotik_ssh"]({"host": "192.168.1.3", "username": "ha", "password": "y"}),
+}
+tracker = PresenceTracker(consider_home=timedelta(minutes=3))
+
+
+async def main() -> None:
+    while True:
+        results = await poll_all(list(aps.values()))
+        now = datetime.now(UTC)
+        reads = [
+            AccessPointRead(ap_id, ap_id, driver.SIGNAL_UNIT, result)
+            for (ap_id, driver), result in zip(aps.items(), results)
+        ]
+        try:
+            tracker.update(reads, now, datetime.now().date())
+        except AllAccessPointsFailed:
+            print("no access point readable: presence unknown")
+        else:
+            phone = tracker.current("5C:AD:BA:00:00:01", now)
+            print("phone", f"home on {phone.access_point} since {phone.arrived}" if phone else "away")
+        await asyncio.sleep(60)
+
+
+asyncio.run(main())
+```
+
+- `PresenceTracker.update(reads, now, today)` takes one round of every access point
+  (each read is a `PollResult` or the exception it raised) and returns the sightings and
+  each access point's state. A device on two access points goes to the stronger signal;
+  a failing access point keeps its clients until the grace period runs out; a round in
+  which none could be read is ridden out within the grace period after the last good
+  one, and past it raises `AllAccessPointsFailed` (presence unknown, not everyone away).
+- `current(mac, now)` is the device's sighting while it is home: access point, SSID,
+  band, signal, `arrived` (start of the visit) and `last_seen`.
+- `to_storage(now, clean=...)` and `restore(stored, now, today)` keep visits and today's
+  coverage counts across a restart; a clean stop (`clean=True`) keeps visits however
+  long the program was down.
+- `coverage.counts` and `access_point_coverage` hold the coverage numbers (see
+  `wifi_ap_associations.coverage`).
+- `poll_all(drivers)` polls them at once within each driver's `POLL_TIMEOUT`;
+  `watch_forever(driver, on_change, ...)` keeps an instant-arrival watch open with the
+  integration's retry timing and calls back when it pauses and resumes.
 
 ## Security
 
