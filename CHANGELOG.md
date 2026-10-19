@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.0
+
+- **Instant arrivals for UniFi.** `unifi_network` has `WATCHES = True`: `async_watch()`
+  calls `on_change()` when the controller reports a client joining the access point,
+  roaming to it or changing radio on it (`EVT_WU_Connected`, `EVT_WU_Roam`,
+  `EVT_WU_RoamRadio` and the guest `EVT_WG_` ones). The events come through a new
+  `UnifiSource.async_watch_events(mac, callback)`, which hands over the controller's raw
+  events; `arrives_at(event, ap_mac)` tells which count. Disconnects count for nothing.
+
 ## 0.10.5
 
 - **`cisco_wlc_snmp` is no longer experimental.** Confirmed in Home Assistant on a

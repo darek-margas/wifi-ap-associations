@@ -15,13 +15,22 @@ clients, one record per client:
 and each access point is a device record ("type": "uap", or a console or gateway
 with built-in radios), with "state" 1 while it is connected to the controller.
 
+The controller also pushes events over its websocket, e.g. a client joining
+
+    {"key": "EVT_WU_Connected", "user": "5c:ad:ba:00:00:01", "ap": "78:8a:20:00:00:10",
+     "ssid": "Home", "radio": "na", ...}
+
+or roaming ({"key": "EVT_WU_Roam", "ap_from": ..., "ap_to": ...}); guests have "EVT_WG_..."
+keys and "guest" instead of "user". Those are the instant arrivals (async_watch).
+
 The source of that data is injected (see UnifiSource), so this module keeps the
 package free of Home Assistant imports and can be tested on its own.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+import logging
 from typing import Any, Protocol
 
 from . import (
@@ -54,6 +63,15 @@ DEVICE_STATES = {
 }
 STATE_CONNECTED = 1
 
+# Controller events that put a client on an access point: joining, roaming to it, and
+# moving between its radios (clients and guests).
+ARRIVAL_EVENTS = frozenset({
+    "EVT_WU_Connected", "EVT_WU_Roam", "EVT_WU_RoamRadio",
+    "EVT_WG_Connected", "EVT_WG_Roam", "EVT_WG_RoamRadio",
+})
+
+_LOGGER = logging.getLogger(__name__)
+
 
 class UnifiSource(Protocol):
     """Where the driver gets controller data (Home Assistant's UniFi integration)."""
@@ -64,6 +82,23 @@ class UnifiSource(Protocol):
     async def async_get_clients(self, mac: str) -> list[Mapping[str, Any]]:
         """Raw records of the clients currently connected to the controller that
         manages the access point with this MAC."""
+
+    async def async_watch_events(
+        self, mac: str, callback: Callable[[Mapping[str, Any]], None]
+    ) -> None:
+        """Hand each raw event of the controller managing this access point to
+        callback, until cancelled. Raises AccessPointError when the events stop."""
+
+
+def arrives_at(event: Mapping[str, Any], ap_mac: str) -> bool:
+    """Whether a controller event puts a client on this access point."""
+    if event.get("key") not in ARRIVAL_EVENTS:
+        return False
+    try:
+        # A roam names "ap_from" and "ap_to"; a join and a radio change name "ap".
+        return normalize_mac(event.get("ap_to") or event.get("ap") or "") == ap_mac
+    except ValueError:
+        return False
 
 
 def is_access_point(device: Mapping[str, Any]) -> bool:
@@ -139,6 +174,9 @@ class UnifiNetworkDriver(AccessPointDriver):
     # The UniFi integration already registers the AP as a device, with client count,
     # uptime, CPU and memory; its area is what the tracked devices report.
     OWN_DEVICE = False
+    # Instant arrivals from the controller's events, which the UniFi integration
+    # already receives: no extra connection.
+    WATCHES = True
 
     def device_mac(self) -> str | None:
         """The MAC of the device the UniFi integration registered for this AP."""
@@ -170,3 +208,21 @@ class UnifiNetworkDriver(AccessPointDriver):
             )
         raw_clients = await self.source.async_get_clients(self.ap_mac)
         return PollResult(parse_clients(raw_clients, self.ap_mac), parse_device(device))
+
+    async def async_watch(self, on_change: Callable[[], None]) -> None:
+        """Call on_change() when the controller reports a client joining this access
+        point, roaming to it or changing radio on it."""
+        if self.source is None:
+            raise AccessPointError("UniFi access points can only be watched inside Home Assistant")
+
+        def event(raw: Mapping[str, Any]) -> None:
+            if arrives_at(raw, self.ap_mac):
+                _LOGGER.debug(
+                    "UniFi %s: %s for %s, polling",
+                    self.ap_mac,
+                    raw.get("key"),
+                    raw.get("user") or raw.get("guest"),
+                )
+                on_change()
+
+        await self.source.async_watch_events(self.ap_mac, event)

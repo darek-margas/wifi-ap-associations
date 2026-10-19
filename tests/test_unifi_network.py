@@ -12,6 +12,7 @@ import pytest
 from wifi_ap_associations import DRIVERS, AccessPointError, AssociatedClient
 from wifi_ap_associations.unifi_network import (
     UnifiNetworkDriver,
+    arrives_at,
     is_access_point,
     parse_clients,
     parse_device,
@@ -144,3 +145,56 @@ def test_poll_unavailable(source, message) -> None:
     driver = UnifiNetworkDriver({"ap_mac": AP}, source)
     with pytest.raises(AccessPointError, match=message):
         asyncio.run(driver.async_poll())
+
+
+# --- instant arrivals: the controller's events ---
+
+PHONE = "5c:ad:ba:00:00:01"
+
+
+def test_arrival_events() -> None:
+    joined = {"key": "EVT_WU_Connected", "user": PHONE, "ap": "78:8a:20:00:00:10"}
+    assert arrives_at(joined, AP)
+    assert not arrives_at(joined, OTHER_AP)
+    roam = {"key": "EVT_WU_Roam", "user": PHONE, "ap_from": "78:8a:20:00:00:20",
+            "ap_to": "78:8a:20:00:00:10"}
+    assert arrives_at(roam, AP)
+    assert not arrives_at(roam, OTHER_AP)  # it left that one: the poll will tell
+    assert arrives_at({"key": "EVT_WU_RoamRadio", "user": PHONE, "ap": "78:8a:20:00:00:10"}, AP)
+    assert arrives_at({"key": "EVT_WG_Connected", "guest": PHONE, "ap": "78:8a:20:00:00:10"}, AP)
+    assert not arrives_at({"key": "EVT_WU_Disconnected", "user": PHONE, "ap": "78:8a:20:00:00:10"}, AP)
+    assert not arrives_at({"key": "EVT_AP_Connected", "ap": "78:8a:20:00:00:10"}, AP)
+    assert not arrives_at({"key": "EVT_WU_Connected", "ap": "garbage"}, AP)
+
+
+class WatchingSource(FakeSource):
+    def __init__(self, events) -> None:
+        super().__init__()
+        self.events = events
+        self.watched = None
+
+    async def async_watch_events(self, mac, callback):
+        self.watched = mac
+        for event in self.events:
+            callback(event)
+        raise AccessPointError("UniFi integration reloaded")
+
+
+def test_watch_polls_for_arrivals_on_its_own_ap() -> None:
+    assert UnifiNetworkDriver.WATCHES is True
+    source = WatchingSource([
+        {"key": "EVT_WU_Connected", "user": PHONE, "ap": "78:8a:20:00:00:10"},
+        {"key": "EVT_WU_Connected", "user": PHONE, "ap": "78:8a:20:00:00:20"},
+        {"key": "EVT_WU_Disconnected", "user": PHONE, "ap": "78:8a:20:00:00:10"},
+        {"key": "EVT_WU_Roam", "user": PHONE, "ap_from": "78:8a:20:00:00:20", "ap_to": "78:8a:20:00:00:10"},
+    ])
+    changes: list[int] = []
+    with pytest.raises(AccessPointError, match="reloaded"):
+        asyncio.run(UnifiNetworkDriver({"ap_mac": AP}, source).async_watch(lambda: changes.append(1)))
+    assert source.watched == AP
+    assert len(changes) == 2
+
+
+def test_watch_needs_home_assistant() -> None:
+    with pytest.raises(AccessPointError, match="inside Home Assistant"):
+        asyncio.run(UnifiNetworkDriver({"ap_mac": AP}).async_watch(lambda: None))
