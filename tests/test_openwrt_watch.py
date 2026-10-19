@@ -251,3 +251,49 @@ def test_heartbeat_lines_count_for_nothing(monkeypatch) -> None:
         assert fake.listen.closed and fake.subscribes[0][1].closed
 
     asyncio.run(main())
+
+
+def test_assoc_then_leaving_within_the_delay_polls_for_nothing() -> None:
+    changes: list[int] = []
+
+    async def main():
+        arrivals = _Arrivals(lambda: changes.append(1))
+        arrivals.line(ASSOC_22)
+        arrivals.line(DEAUTH)
+        await asyncio.sleep(0.1)
+
+    asyncio.run(main())
+    assert changes == []
+
+
+def test_pending_assoc_checks_are_cancelled_when_the_watch_ends() -> None:
+    changes: list[int] = []
+
+    async def main():
+        arrivals = _Arrivals(lambda: changes.append(1))
+        arrivals.line(ASSOC_22)
+        arrivals.close()  # the feed failed before the delay ran out
+        await asyncio.sleep(0.1)
+        arrivals.line(ASSOC_22)  # a new one after closing still works
+        await asyncio.sleep(0.1)
+
+    asyncio.run(main())
+    assert changes == [1]
+
+
+def test_a_watch_that_ends_leaves_no_delayed_poll(monkeypatch) -> None:
+    fake = install(monkeypatch, ["hostapd.wlan0"])
+    changes: list[int] = []
+
+    async def main():
+        task = asyncio.ensure_future(OpenWrtSsh(CONFIG).async_watch(lambda: changes.append(1)))
+        await settle()
+        feed = fake.subscribes[0][1]
+        feed.queue.put_nowait(ASSOC_22)
+        feed.queue.put_nowait("")  # the feed ends right after the assoc
+        with pytest.raises(AccessPointError):
+            await asyncio.wait_for(task, 1)
+        await asyncio.sleep(0.1)  # past the assoc delay
+
+    asyncio.run(main())
+    assert changes == []

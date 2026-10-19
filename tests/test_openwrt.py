@@ -125,10 +125,30 @@ def test_optional_broken_sections_are_skipped() -> None:
     assert result.info.name is None and result.info.uptime_seconds is None
 
 
-def test_no_radios_is_no_clients_not_an_error() -> None:
-    result = parse_poll(output(("board", BOARD), ("info", INFO)))
-    assert result.clients == []
-    assert result.info.name == "Hallway"
+def test_no_hostapd_interface_is_an_unreadable_ap_not_an_empty_one() -> None:
+    # During a Wi-Fi reload hostapd's objects are gone for a few seconds: reading that
+    # as "no clients" would make everyone look gone (review of 0.11.0b5).
+    with pytest.raises(AccessPointError, match="No Wi-Fi interface"):
+        parse_poll(output(("board", BOARD), ("info", INFO)))
+    # A radio with nobody on it is a real, empty answer.
+    empty = parse_poll(output(("board", BOARD), ("info", INFO),
+                              ("clients hostapd.wlan0", {"freq": 2412, "clients": {}})))
+    assert empty.clients == [] and empty.info.name == "Hallway"
+
+
+def test_only_affirmatively_associated_and_authorized_stations_count() -> None:
+    from wifi_ap_associations.openwrt_ssh import parse_clients
+
+    stations = {
+        "5c:ad:ba:00:00:01": {"assoc": True, "authorized": True},
+        "5c:ad:ba:00:00:02": {"assoc": True, "authorized": None},
+        "5c:ad:ba:00:00:03": {"assoc": True},
+        "5c:ad:ba:00:00:04": {"authorized": True},
+        "5c:ad:ba:00:00:05": {"assoc": 1, "authorized": 1},
+    }
+    assert [c.mac for c in parse_clients({"freq": 2412, "clients": stations}, None)] == [
+        "5C:AD:BA:00:00:01"
+    ]
 
 
 def test_odd_values_are_dropped() -> None:

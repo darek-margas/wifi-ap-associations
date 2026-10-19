@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.2
+
+From a review of 0.12.1, all in the OpenWrt driver:
+
+- **A poll that finds no hostapd interface is a failure, not an empty AP.** During a
+  Wi-Fi reload hostapd's ubus objects are gone for a few seconds, and the poll returned
+  no clients, as if everyone had left. It now raises `AccessPointError` ("No Wi-Fi
+  interface on ubus"), so the AP is unreadable for that poll and its clients keep their
+  sightings. Checked live on OpenWrt 25.12.5 and 22.03.7 with the AP radio down. A
+  radio with nobody on it is still an empty answer.
+- **Only stations hostapd reports as associated and authorized (`true`) count.** A
+  missing or null flag counted before; hostapd always sends both as true/false.
+- **Instant arrivals on hostapd without `sta-authorized` (22.03):** the delayed poll
+  after `assoc` is skipped when the client left again within the delay, and pending
+  ones are cancelled when the watch ends or reconnects.
+
 ## 0.12.1
 
 - **Collector: "legacy SSH" no longer drops modern algorithms.** It replaced the default

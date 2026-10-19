@@ -101,6 +101,7 @@ WATCH_LIST_COMMAND = "ubus list 'hostapd.*'"
 WATCH_OBJECTS_COMMAND = "ubus listen ubus.object.add ubus.object.remove"
 WATCH_ARRIVAL = "sta-authorized"
 WATCH_ASSOC = "assoc"
+WATCH_LEAVE = frozenset({"deauth", "disassoc"})
 WATCH_ASSOC_DELAY = 2.0
 # hostapd removes and adds its objects within a few seconds on a reload: wait this long
 # after a change before subscribing to what is there then.
@@ -180,7 +181,9 @@ def parse_clients(get_clients: dict[str, Any], ssid: str | None) -> list[Associa
     for mac, station in stations.items():
         if not isinstance(station, dict):
             continue
-        if station.get("assoc") is False or station.get("authorized") is False:
+        # hostapd reports both flags as true/false for every station; anything else is
+        # not affirmatively connected.
+        if station.get("assoc") is not True or station.get("authorized") is not True:
             continue
         try:
             normalized = normalize_mac(mac)
@@ -230,7 +233,9 @@ def parse_poll(output: str) -> PollResult:
     """Clients of every radio, and what the AP reports about itself.
 
     Broken device details or status are optional, but a failed client-table read
-    is an AP failure, not evidence that its clients left.
+    is an AP failure, not evidence that its clients left. So is a poll that found no
+    hostapd interface at all: during a Wi-Fi reload hostapd's ubus objects are gone
+    for a few seconds, and an AP with Wi-Fi off serves no clients either way.
     """
     board = info = None
     ssids: dict[str, str | None] = {}
@@ -258,6 +263,10 @@ def parse_poll(output: str) -> PollResult:
             clients.extend(parse_clients(data, ssids.get(obj)))
     if not valid_system and not valid_clients:
         raise AccessPointError("No valid ubus response from the access point")
+    if not valid_clients:
+        raise AccessPointError(
+            "No Wi-Fi interface on ubus (hostapd not running: Wi-Fi off or restarting)"
+        )
     return PollResult(clients, parse_info(board, info))
 
 
@@ -289,6 +298,14 @@ class _Arrivals:
     def __init__(self, on_change: Callable[[], None]) -> None:
         self._on_change = on_change
         self._authorized_at: dict[str, float] = {}
+        self._left_at: dict[str, float] = {}
+        self._pending: set[asyncio.TimerHandle] = set()
+
+    def close(self) -> None:
+        """Cancel the delayed checks still pending (the watch is ending)."""
+        for handle in self._pending:
+            handle.cancel()
+        self._pending.clear()
 
     def line(self, line: str) -> None:
         try:
@@ -298,21 +315,36 @@ class _Arrivals:
         if not isinstance(event, dict) or len(event) != 1:
             return
         ((kind, data),) = event.items()
-        if kind not in (WATCH_ARRIVAL, WATCH_ASSOC) or not isinstance(data, dict):
+        if not isinstance(data, dict):
             return
         mac = str(data.get("address", ""))
+        if kind in WATCH_LEAVE:
+            self._left_at[mac] = time.monotonic()
+            return
+        if kind not in (WATCH_ARRIVAL, WATCH_ASSOC):
+            return
         if kind == WATCH_ARRIVAL:
             self._authorized_at[mac] = time.monotonic()
             _LOGGER.debug("hostapd: %s authorized on %s, polling", mac, data.get("ifname", "?"))
             self._on_change()
             return
-        # "assoc": poll a moment later, unless "sta-authorized" came meanwhile.
-        asyncio.get_running_loop().call_later(
-            WATCH_ASSOC_DELAY, self._after_assoc, mac, time.monotonic()
-        )
+        # "assoc": poll a moment later, unless "sta-authorized" came meanwhile or the
+        # client left again.
+        assoc_at = time.monotonic()
+        handle: asyncio.TimerHandle | None = None
+
+        def later() -> None:
+            self._pending.discard(handle)  # type: ignore[arg-type]
+            self._after_assoc(mac, assoc_at)
+
+        handle = asyncio.get_running_loop().call_later(WATCH_ASSOC_DELAY, later)
+        self._pending.add(handle)
 
     def _after_assoc(self, mac: str, assoc_at: float) -> None:
         if self._authorized_at.get(mac, -1.0) >= assoc_at:
+            return
+        if self._left_at.get(mac, -1.0) >= assoc_at:
+            _LOGGER.debug("hostapd: %s associated and left again, no poll", mac)
             return
         _LOGGER.debug("hostapd: %s associated (no authorized event), polling", mac)
         self._on_change()
@@ -354,6 +386,7 @@ async def _watch_hostapd(conn: Any, host: str, on_change: Callable[[], None]) ->
                 reloaded = True
                 await asyncio.sleep(WATCH_SETTLE_SECONDS)
         finally:
+            arrivals.close()
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
 
