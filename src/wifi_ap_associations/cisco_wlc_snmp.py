@@ -1,4 +1,4 @@
-"""Cisco Catalyst 9800 wireless controllers over SNMP (experimental).
+"""Cisco Catalyst 9800 wireless controllers over SNMP.
 
 For controllers that can be read over SNMP but not over SSH. As with the SSH driver,
 one access point is one AP joined to the controller, and the APs of a controller polled

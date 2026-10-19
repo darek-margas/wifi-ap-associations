@@ -1,4 +1,4 @@
-"""MikroTik CAPsMAN controllers (RouterOS 7, wifi package) over SSH (experimental).
+"""MikroTik CAPsMAN controllers (RouterOS 7, wifi package) over SSH.
 
 With CAPsMAN, the access points (CAPs) don't list their clients: the controller does,
 for all of them. So one access point here is one CAP, set up with the controller's login

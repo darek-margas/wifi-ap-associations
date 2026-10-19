@@ -1,4 +1,4 @@
-"""Cisco Catalyst 9800 wireless controllers (IOS-XE) over SSH (experimental).
+"""Cisco Catalyst 9800 wireless controllers (IOS-XE) over SSH.
 
 Lightweight Cisco APs (9120, 9130, 9166, ...) don't list their clients; their controller
 does, for all of its APs at once. So one access point here is one AP joined to a

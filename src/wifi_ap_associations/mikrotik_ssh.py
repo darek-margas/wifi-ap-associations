@@ -1,4 +1,4 @@
-"""MikroTik RouterOS access points over SSH (experimental).
+"""MikroTik RouterOS access points over SSH.
 
 RouterOS runs a command sent as an SSH exec request and returns just its output, with
 no terminal, logo or pager (an interactive session sends escape queries, wraps lines at
@@ -371,7 +371,7 @@ class MikroTikSsh(AccessPointDriver):
         {"name", "model", "firmware", "uptime_seconds", "cpu_percent", "memory_percent"}
     )
     SSH_POLICY = MIKROTIK_SSH_POLICY
-    # Instant arrivals: `registration-table print follow-only` (experimental).
+    # Instant arrivals: `registration-table print follow-only`.
     WATCHES = True
     FIELDS = (
         DriverField("host"),
