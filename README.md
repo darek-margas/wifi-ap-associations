@@ -86,7 +86,7 @@ asyncio.run(main())
 - `BLOCKING_IMPORTS` names modules a driver loads on its first poll that read files from
   disk (pysnmp for the SNMP driver). In an asyncio program that must not block, import
   them in a worker thread first, as Home Assistant does.
-- Drivers with `WATCHES = True` (MikroTik, UniFi, OpenWrt) also offer
+- Drivers with `WATCHES = True` (MikroTik, UniFi, OpenWrt, D-Link DAP) also offer
   `async_watch(on_change)`: it keeps the device's change feed open and calls
   `on_change()` whenever the clients may have changed, so a program can poll at once
   (instant arrivals). It runs until cancelled and raises `AccessPointError` when the

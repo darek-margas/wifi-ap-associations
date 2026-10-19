@@ -198,3 +198,26 @@ def test_watch_polls_for_arrivals_on_its_own_ap() -> None:
 def test_watch_needs_home_assistant() -> None:
     with pytest.raises(AccessPointError, match="inside Home Assistant"):
         asyncio.run(UnifiNetworkDriver({"ap_mac": AP}).async_watch(lambda: None))
+
+
+def test_leave_events() -> None:
+    from wifi_ap_associations.unifi_network import leaves
+
+    assert leaves({"key": "EVT_WU_Disconnected", "user": PHONE, "ap": "78:8a:20:00:00:10"}, AP)
+    assert leaves({"key": "EVT_WG_Disconnected", "guest": PHONE, "ap": "78:8a:20:00:00:10"}, AP)
+    assert leaves({"key": "EVT_WU_Roam", "ap_from": "78:8a:20:00:00:10", "ap_to": "78:8a:20:00:00:20"}, AP)
+    assert not leaves({"key": "EVT_WU_Roam", "ap_from": "78:8a:20:00:00:20", "ap_to": "78:8a:20:00:00:10"}, AP)
+    assert not leaves({"key": "EVT_WU_Connected", "ap": "78:8a:20:00:00:10"}, AP)
+    assert not leaves({"key": "EVT_WU_Disconnected", "ap": "78:8a:20:00:00:20"}, AP)
+
+
+def test_watch_reports_leaves_when_asked() -> None:
+    source = WatchingSource([
+        {"key": "EVT_WU_Disconnected", "user": PHONE, "ap": "78:8a:20:00:00:10"},
+        {"key": "EVT_WU_Connected", "user": PHONE, "ap": "78:8a:20:00:00:10"},
+    ])
+    events: list[str] = []
+    with pytest.raises(AccessPointError):
+        asyncio.run(UnifiNetworkDriver({"ap_mac": AP}, source).async_watch(
+            lambda: events.append("change"), on_leave=lambda: events.append("leave")))
+    assert events == ["leave", "change"]

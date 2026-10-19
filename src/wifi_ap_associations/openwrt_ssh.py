@@ -295,8 +295,11 @@ async def _remote(conn: Any, command: str) -> AsyncIterator[Any]:
 class _Arrivals:
     """Which hostapd notifications are a client joining; calls on_change() for them."""
 
-    def __init__(self, on_change: Callable[[], None]) -> None:
+    def __init__(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
         self._on_change = on_change
+        self._on_leave = on_leave
         self._authorized_at: dict[str, float] = {}
         self._left_at: dict[str, float] = {}
         self._pending: set[asyncio.TimerHandle] = set()
@@ -320,6 +323,9 @@ class _Arrivals:
         mac = str(data.get("address", ""))
         if kind in WATCH_LEAVE:
             self._left_at[mac] = time.monotonic()
+            if self._on_leave is not None:
+                _LOGGER.debug("hostapd: %s left (%s)", mac, kind)
+                self._on_leave()
             return
         if kind not in (WATCH_ARRIVAL, WATCH_ASSOC):
             return
@@ -350,10 +356,15 @@ class _Arrivals:
         self._on_change()
 
 
-async def _watch_hostapd(conn: Any, host: str, on_change: Callable[[], None]) -> None:
+async def _watch_hostapd(
+    conn: Any,
+    host: str,
+    on_change: Callable[[], None],
+    on_leave: Callable[[], None] | None = None,
+) -> None:
     """Follow hostapd's notifications on one connection, subscribing again whenever its
     ubus objects change (a Wi-Fi reload). Returns only by raising."""
-    arrivals = _Arrivals(on_change)
+    arrivals = _Arrivals(on_change, on_leave)
     object_changed = asyncio.Event()
 
     async with _remote(conn, WATCH_OBJECTS_COMMAND) as objects:
@@ -470,8 +481,11 @@ class OpenWrtSsh(AccessPointDriver):
 
     WATCHES = True
 
-    async def async_watch(self, on_change: Callable[[], None]) -> None:
-        """Call on_change() when a client joins any hostapd interface of the AP."""
+    async def async_watch(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
+        """Call on_change() when a client joins any hostapd interface of the AP, and
+        on_leave() when one leaves (deauth or disassoc)."""
         host = self.config["host"]
         try:
             async with asyncssh.connect(
@@ -482,7 +496,7 @@ class OpenWrtSsh(AccessPointDriver):
                 **self.SSH_POLICY.connect_options(),
                 **WATCH_KEEPALIVE,
             ) as conn:
-                await _watch_hostapd(conn, host, on_change)
+                await _watch_hostapd(conn, host, on_change, on_leave)
         except asyncssh.PermissionDenied as err:
             raise AccessPointAuthError(f"{host}: login rejected") from err
         except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:

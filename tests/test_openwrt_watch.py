@@ -297,3 +297,15 @@ def test_a_watch_that_ends_leaves_no_delayed_poll(monkeypatch) -> None:
 
     asyncio.run(main())
     assert changes == []
+
+
+def test_leaving_events_call_on_leave() -> None:
+    changes: list[str] = []
+
+    async def main():
+        arrivals = _Arrivals(lambda: changes.append("change"), lambda: changes.append("leave"))
+        for line in (DEAUTH, DISASSOC, PROBE):
+            arrivals.line(line)
+
+    asyncio.run(main())
+    assert changes == ["leave", "leave"]

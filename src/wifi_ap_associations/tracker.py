@@ -47,6 +47,8 @@ SIGHTING_RETENTION = timedelta(days=7)
 # A device read in the latest poll must count as present, so a shorter grace period
 # acts as this one: away after one missed poll.
 MIN_CONSIDER_HOME = timedelta(seconds=30)
+# Fast departure is never quicker than this after a reported leave.
+MIN_FAST_DEPARTURE = timedelta(seconds=10)
 DEFAULT_POLL_INTERVAL = timedelta(seconds=60)
 # Sightings this close to the poll interval apart still belong to the same visit, even
 # with a short grace period (polls are an interval apart, give or take a slow AP).
@@ -73,16 +75,32 @@ class PresenceSnapshot:
 
 
 class PresenceTracker:
-    """The presence state across poll rounds (see the module docstring)."""
+    """The presence state across poll rounds (see the module docstring).
+
+    Fast departure (opt-in, fast_departure set): a device whose access point reported a
+    client leaving (note_leave(), from a watch's on_leave) after the device was last seen,
+    and which a later successful round of that access point didn't see, is away
+    fast_departure after that report instead of after the grace period. Faster, at a
+    price: a device that drops off for longer than that and comes back (power saving, a
+    reconnect) shows away meanwhile. Access points report a leave without saying which
+    client, so any device missing from that access point after a leave counts.
+    """
 
     def __init__(
         self,
         consider_home: timedelta,
         poll_interval: timedelta = DEFAULT_POLL_INTERVAL,
         retention: timedelta = SIGHTING_RETENTION,
+        fast_departure: timedelta | None = None,
     ) -> None:
-        """consider_home: the grace period; poll_interval: how often the program polls."""
+        """consider_home: the grace period; poll_interval: how often the program polls;
+        fast_departure: off (None) or how long after a reported leave (see above)."""
         self.consider_home = max(consider_home, MIN_CONSIDER_HOME)
+        self.fast_departure = (
+            max(fast_departure, MIN_FAST_DEPARTURE) if fast_departure else None
+        )
+        # When each access point last reported a client leaving.
+        self._leaves: dict[str, datetime] = {}
         self.visit_gap = max(self.consider_home, poll_interval + VISIT_GAP_SLACK)
         self.retention = retention
         self.sightings: dict[str, Sighting] = {}
@@ -158,14 +176,51 @@ class PresenceTracker:
             self._restored_at = None
         seen = carry_visits(merged.sightings, self.sightings, now, visit_gap)
         self.sightings = prune({**self.sightings, **seen}, now, self.retention)
+        # Reports older than the grace period can't shorten anything any more.
+        self._leaves = {ap: at for ap, at in self._leaves.items() if now - at < self.consider_home}
         return self.snapshot()
 
+    def note_leave(self, access_point_id: str, at: datetime) -> None:
+        """An access point reported that a client left it (for fast departure)."""
+        self._leaves[access_point_id] = at
+
+    def _left_fast(self, sighting: Sighting, now: datetime) -> datetime | None:
+        """When the device counted as away by fast departure, or None."""
+        if self.fast_departure is None:
+            return None
+        leave = self._leaves.get(sighting.access_point_id)
+        state = self.access_points.get(sighting.access_point_id)
+        if (
+            leave is None
+            or leave < sighting.last_seen  # seen after the report: not this device
+            or self.last_success is None
+            or self.last_success <= leave  # no round since the report
+            or sighting.last_seen >= self.last_success  # seen in the latest round
+            or state is None
+            or not state.available  # its access point wasn't read: no evidence
+        ):
+            return None
+        gone = leave + self.fast_departure
+        return gone if now >= gone else None
+
     def current(self, mac: str | None, now: datetime) -> Sighting | None:
-        """The MAC's sighting if it is within the grace period (home), else None."""
+        """The MAC's sighting if it is home (within the grace period, and not gone by
+        fast departure), else None."""
         if not mac:
             return None
         sighting = self.sightings.get(mac)
-        return sighting if is_present(sighting, now, self.consider_home) else None
+        if not is_present(sighting, now, self.consider_home):
+            return None
+        assert sighting is not None
+        return None if self._left_fast(sighting, now) else sighting
+
+    def away_since(self, mac: str, now: datetime) -> datetime | None:
+        """When a device that isn't home counted as away (None if never seen)."""
+        sighting = self.sightings.get(mac)
+        if sighting is None:
+            return None
+        fast = self._left_fast(sighting, now)
+        return fast or sighting.last_seen + self.consider_home
 
 
 async def poll_all(drivers: Sequence[AccessPointDriver]) -> list[PollResult | BaseException]:
@@ -184,6 +239,7 @@ async def watch_forever(
     driver: AccessPointDriver,
     on_change: Callable[[], None],
     *,
+    on_leave: Callable[[], None] | None = None,
     on_paused: Callable[[str], None] | None = None,
     on_resumed: Callable[[], None] | None = None,
     on_failed_again: Callable[[str], None] | None = None,
@@ -193,18 +249,23 @@ async def watch_forever(
 ) -> None:
     """Keep one access point's change feed open (instant arrivals) until cancelled.
 
-    on_change() only asks for a poll; the poll decides who is there. A feed that ends
-    or fails is started again after a growing wait (retry_min seconds, doubling up to
-    retry_max); one that ran `stable` seconds counts as working. on_paused(reason) is
-    called once when it stops working, on_resumed() once when it works again, and
-    on_failed_again(reason) for each failed retry in between.
+    on_change() only asks for a poll; the poll decides who is there. on_leave(), if
+    given, is passed to the driver: a client left this access point (for fast
+    departure, PresenceTracker.note_leave()). A feed that ends or fails is started
+    again after a growing wait (retry_min seconds, doubling up to retry_max); one that
+    ran `stable` seconds counts as working. on_paused(reason) is called once when it
+    stops working, on_resumed() once when it works again, and on_failed_again(reason)
+    for each failed retry in between.
     """
     delay = retry_min
     paused = False
     while True:
         started = time.monotonic()
         try:
-            await driver.async_watch(on_change)
+            if on_leave is None:
+                await driver.async_watch(on_change)
+            else:
+                await driver.async_watch(on_change, on_leave=on_leave)
             reason = "the feed ended"
         except asyncio.CancelledError:
             raise

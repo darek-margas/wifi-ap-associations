@@ -1,7 +1,7 @@
 """Read one access point's association table and print it (no Home Assistant needed).
 
 Usage:
-    wifi-ap-probe --type dlink_dap_ssh --host 192.168.1.231 --username admin
+    wifi-ap-probe --type dlink_dap_ssh --host 192.0.2.31 --username admin
     wifi-ap-probe --type cisco_wlc_ssh --host 192.168.1.20 --username ha --ap-name AP01
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01   # SNMP v2c
     wifi-ap-probe --type cisco_wlc_snmp --host 192.168.1.20 --ap-name AP01 --snmp-version v3 --username ro --auth-protocol sha256

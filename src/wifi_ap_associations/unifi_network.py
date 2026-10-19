@@ -63,6 +63,9 @@ DEVICE_STATES = {
 }
 STATE_CONNECTED = 1
 
+# Controller events of a client leaving the access point (clients and guests).
+LEAVE_EVENTS = frozenset({"EVT_WU_Disconnected", "EVT_WG_Disconnected"})
+
 # Controller events that put a client on an access point: joining, roaming to it, and
 # moving between its radios (clients and guests).
 ARRIVAL_EVENTS = frozenset({
@@ -88,6 +91,22 @@ class UnifiSource(Protocol):
     ) -> None:
         """Hand each raw event of the controller managing this access point to
         callback, until cancelled. Raises AccessPointError when the events stop."""
+
+
+def leaves(event: Mapping[str, Any], ap_mac: str) -> bool:
+    """Whether a controller event is a client leaving this access point (disconnecting,
+    or roaming away from it)."""
+    key = event.get("key")
+    if key in LEAVE_EVENTS:
+        where = event.get("ap")
+    elif key in ("EVT_WU_Roam", "EVT_WG_Roam"):
+        where = event.get("ap_from")
+    else:
+        return False
+    try:
+        return normalize_mac(where or "") == ap_mac
+    except ValueError:
+        return False
 
 
 def arrives_at(event: Mapping[str, Any], ap_mac: str) -> bool:
@@ -209,7 +228,9 @@ class UnifiNetworkDriver(AccessPointDriver):
         raw_clients = await self.source.async_get_clients(self.ap_mac)
         return PollResult(parse_clients(raw_clients, self.ap_mac), parse_device(device))
 
-    async def async_watch(self, on_change: Callable[[], None]) -> None:
+    async def async_watch(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
         """Call on_change() when the controller reports a client joining this access
         point, roaming to it or changing radio on it."""
         if self.source is None:
@@ -224,5 +245,13 @@ class UnifiNetworkDriver(AccessPointDriver):
                     raw.get("user") or raw.get("guest"),
                 )
                 on_change()
+            elif on_leave is not None and leaves(raw, self.ap_mac):
+                _LOGGER.debug(
+                    "UniFi %s: %s for %s, a client left",
+                    self.ap_mac,
+                    raw.get("key"),
+                    raw.get("user") or raw.get("guest"),
+                )
+                on_leave()
 
         await self.source.async_watch_events(self.ap_mac, event)

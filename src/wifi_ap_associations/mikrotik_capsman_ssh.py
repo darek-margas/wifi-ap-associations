@@ -224,7 +224,9 @@ class MikroTikCapsmanSsh(AccessPointDriver):
             str(self.config["username"]),
         )
 
-    async def async_watch(self, on_change: Callable[[], None]) -> None:
+    async def async_watch(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
         """Follow the controller's registration table (all CAPs' clients)."""
         await watch_registrations(
             self.config,

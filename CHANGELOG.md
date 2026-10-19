@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.0
+
+- **Instant arrivals for D-Link DAP, through SNMP traps.** `dlink_dap_ssh` has
+  `WATCHES = True`: a DAP with its trap server set sends an SNMPv1 trap the moment a
+  client joins (specific trap 14) or leaves (20), enterprise
+  `1.3.6.1.4.1.171.10.37.<model>.5.7.2`, the AP's own MAC as the only variable (seen on a
+  DAP-2610, checked against its log to the second). A join calls `on_change()` 3 s
+  later, after the client's key handshake. Its syslog was tried too: one line every
+  ~21 s from a queue and lines dropped, so no use.
+- **New module `snmp_trap`:** one shared UDP listener (port 162 by default,
+  `LISTENER.configure(port=...)`) decoding SNMPv1 and v2c traps; subscribers get the
+  traps of their own address only. Every trap received is logged at debug in full
+  (sender, version, community, enterprise, trap numbers, variables), from any sender, to
+  read a new model's traps from the log.
+- **Leaves:** `async_watch(on_change, on_leave=None)`. `on_leave()` means a client left
+  the access point (not which one): OpenWrt `deauth` / `disassoc`, UniFi disconnects and
+  roams away, D-Link trap 20; MikroTik reports none. `watch_forever(..., on_leave=...)`
+  passes it on (to drivers that take it).
+- **Fast departure (opt-in):** `PresenceTracker(..., fast_departure=...)` and
+  `note_leave(access_point_id, at)`. A device that was on an access point which then
+  reported a leave, and which the next successful poll of it didn't see, is away
+  `fast_departure` after the report (never under 10 s) instead of after the grace period.
+  `away_since(mac, now)` gives when a device counted as away.
+
 ## 0.12.3
 
 From a TP-Link EAP670's reports (standalone, without a controller;

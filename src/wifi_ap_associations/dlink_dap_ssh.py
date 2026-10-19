@@ -17,15 +17,35 @@ The DAP CLI lists associated clients per radio: "config wlan 0" selects 2.4 GHz 
 ClientN numbering restarts for every SSID, so records are keyed by MAC. Note that
 "set band 2.4G/5G" does not change what "get clientinfo" shows; "config wlan" does.
 These units only offer password logins and old SSH algorithms.
+
+Instant arrivals come from SNMP traps: the CLI has no way to follow changes, but a DAP
+with a trap server set sends an SNMPv1 trap the moment a client joins or leaves. Seen on
+a DAP-2610 (community "dmpublic"), checked against its syslog to the second:
+
+    enterprise 1.3.6.1.4.1.171.10.37.59.5.7.2, specific trap 14: a client associated
+    enterprise 1.3.6.1.4.1.171.10.37.59.5.7.2, specific trap 20: a client left
+        (deauthenticated, disassociated, or aged out)
+    1.3.6.1.4.1.171.10.37.59.2.1.1.1.1.5 = "f4:8c:eb:..": the access point's own MAC
+
+(The enterprise arrives as ...5.7.2.0.) Specific trap 1 came after each failed SSH login;
+it and any other number are ignored, but logged at debug like every trap.
+
+They don't say which client: a join only asks for a poll of this AP. Other DAP models
+differ only in the model number (59 here). The DAP's syslog reports the same events with
+the client's MAC but sends one line about every 21 s from a queue, and drops lines, so
+it is no use for this.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
+import logging
 import re
+import socket
 import time
 from typing import Any
 
@@ -43,7 +63,29 @@ from . import (
     register,
 )
 
+from . import snmp_trap
 from .ssh import SshPolicy
+
+_LOGGER = logging.getLogger(__name__)
+
+# SNMP traps of D-Link DAP access points (see the module docstring).
+TRAP_ENTERPRISE_PREFIX = "1.3.6.1.4.1.171.10.37."
+TRAP_JOINED = 14
+TRAP_LEFT = 20
+# A trap comes at association, before the client's key handshake; polling a moment
+# later finds it connected.
+TRAP_JOIN_DELAY = 3.0
+
+
+def trap_kind(trap: snmp_trap.Trap) -> str | None:
+    """"joined", "left", or None for a trap that isn't a DAP client trap."""
+    if not trap.enterprise.startswith(TRAP_ENTERPRISE_PREFIX):
+        return None
+    if trap.specific == TRAP_JOINED:
+        return "joined"
+    if trap.specific == TRAP_LEFT:
+        return "left"
+    return None
 
 RADIOS = (("0", "2.4GHz"), ("1", "5GHz"))
 
@@ -163,6 +205,57 @@ class DlinkDapSsh(AccessPointDriver):
         DriverField("username", default="admin"),
         DriverField("password", secret=True),
     )
+
+    # Instant arrivals from SNMP traps (see the module docstring): the DAP's trap server
+    # must be set to this program's address.
+    WATCHES = True
+
+    async def async_watch(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
+        """Call on_change() a moment after the DAP sends a "client joined" trap, and
+        on_leave() for "client left". Runs until cancelled; AccessPointError when the
+        trap port can't be opened or the host has no address."""
+        host = str(self.config["host"])
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await loop.getaddrinfo(host, None, family=socket.AF_INET)
+            address = str(infos[0][4][0])
+        except (OSError, IndexError) as err:
+            raise AccessPointError(f"{host}: no IPv4 address to receive traps from ({err})") from err
+        pending: set[asyncio.TimerHandle] = set()
+
+        def received(trap: snmp_trap.Trap) -> None:
+            kind = trap_kind(trap)
+            if kind == "joined":
+                _LOGGER.debug("%s: trap %s, a client joined: polling in %.0f s",
+                              host, trap.specific, TRAP_JOIN_DELAY)
+                for handle in [h for h in pending if h.when() <= loop.time()]:
+                    pending.discard(handle)
+                pending.add(loop.call_later(TRAP_JOIN_DELAY, on_change))
+            elif kind == "left":
+                _LOGGER.debug("%s: trap %s, a client left", host, trap.specific)
+                if on_leave is not None:
+                    on_leave()
+            else:
+                _LOGGER.debug("%s: trap not about clients, ignored", host)
+
+        try:
+            unsubscribe = await snmp_trap.LISTENER.subscribe(address, received)
+        except OSError as err:
+            port = snmp_trap.LISTENER.port
+            reason = err.strerror or str(err)
+            raise AccessPointError(
+                f"cannot listen for SNMP traps on UDP port {port}: {reason}"
+                + (" (port 162 needs root or CAP_NET_BIND_SERVICE)" if port < 1024 else "")
+            ) from err
+        _LOGGER.debug("%s: waiting for SNMP traps from %s", host, address)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            unsubscribe()
+            for handle in pending:
+                handle.cancel()
 
     def __init__(self, config: dict[str, Any]) -> None:
         """Set up the caches for SSID names and static device details."""

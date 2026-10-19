@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.12.3"
+__version__ = "0.13.0"
 
 
 class AccessPointError(Exception):
@@ -148,13 +148,17 @@ class AccessPointDriver(ABC):
         of one CAPsMAN controller; by default each access point has its own."""
         return (self.TYPE, self.identity(self.config))
 
-    async def async_watch(self, on_change: Callable[[], None]) -> None:
+    async def async_watch(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
         """Call on_change() whenever the access point's clients may have changed.
 
         Runs until cancelled. on_change() takes no arguments: nothing an event says is
-        trusted, it only asks for a poll. Raises AccessPointAuthError or AccessPointError
-        when the watch can't go on (connection lost, the device ended it); the caller
-        tries again later. Only drivers with WATCHES = True implement it.
+        trusted, it only asks for a poll. on_leave(), if given, is called when the access
+        point reports that a client left it (not which one); drivers whose feed doesn't
+        say so never call it. Raises AccessPointAuthError or AccessPointError when the
+        watch can't go on (connection lost, the device ended it); the caller tries again
+        later. Only drivers with WATCHES = True implement it.
         """
         raise NotImplementedError(f"{self.TYPE} can't watch for changes")
 

@@ -145,12 +145,12 @@ def test_capsman_watches_the_controller_once_for_all_caps(monkeypatch) -> None:
 
 def test_only_watching_drivers_watch() -> None:
     assert MikroTikSsh.WATCHES is True
-    assert DRIVERS["dlink_dap_ssh"].WATCHES is False
+    assert DRIVERS["cisco_wlc_ssh"].WATCHES is False
     plain = MikroTikSsh(CONFIG)
     assert plain.watch_key() != MikroTikSsh({**CONFIG, "host": "192.0.2.2"}).watch_key()
-    dlink = DRIVERS["dlink_dap_ssh"](CONFIG)
+    cisco = DRIVERS["cisco_wlc_ssh"]({**CONFIG, "ap_name": "AP01"})
     with pytest.raises(NotImplementedError):
-        asyncio.run(dlink.async_watch(lambda: None))
+        asyncio.run(cisco.async_watch(lambda: None))
 
 
 # --- what follow-only really prints (RouterOS 7.24.4, #11); MACs made up --------------

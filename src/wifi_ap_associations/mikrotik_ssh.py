@@ -396,7 +396,9 @@ class MikroTikSsh(AccessPointDriver):
     async def _run_all(self) -> dict[str, str]:
         return await run_commands(self.config, COMMANDS, self.SSH_POLICY)
 
-    async def async_watch(self, on_change: Callable[[], None]) -> None:
+    async def async_watch(
+        self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None
+    ) -> None:
         """Follow both Wi-Fi packages' registration tables (see watch_registrations)."""
         await watch_registrations(
             self.config,

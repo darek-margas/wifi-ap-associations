@@ -258,3 +258,76 @@ def test_a_watch_that_ran_long_enough_resumes() -> None:
     driver = Watching({"host": "x"}, ["lost", "ends", "forever"])
     # stable=0: every run counts as having worked
     assert run_watch(driver, stable=0) == ["paused: lost", "resumed", "paused: the feed ended"]
+
+
+# --- fast departure (opt-in) ---
+
+
+def test_fast_departure_after_a_reported_leave() -> None:
+    tracker = PresenceTracker(GRACE, fast_departure=timedelta(seconds=30))
+    tracker.update([read("hall", poll((PHONE, -50), (LAPTOP, -60)))], T0, TODAY)
+    leave = T0 + timedelta(seconds=20)
+    tracker.note_leave("hall", leave)
+    tracker.update([read("hall", poll((LAPTOP, -60)))], leave + timedelta(seconds=3), TODAY)
+    # Before the fast departure time it's still home; after it, away (not after 3 min).
+    assert tracker.current(PHONE, leave + timedelta(seconds=29)) is not None
+    assert tracker.current(PHONE, leave + timedelta(seconds=30)) is None
+    assert tracker.away_since(PHONE, leave + timedelta(seconds=40)) == leave + timedelta(seconds=30)
+    # The laptop, seen in the round after the leave, isn't affected.
+    assert tracker.current(LAPTOP, leave + timedelta(seconds=40)) is not None
+
+
+def test_fast_departure_needs_a_round_of_that_ap_without_the_device() -> None:
+    tracker = PresenceTracker(GRACE, fast_departure=timedelta(seconds=30))
+    tracker.update([read("hall", poll((PHONE, -50)))], T0, TODAY)
+    leave = T0 + timedelta(seconds=10)
+    tracker.note_leave("hall", leave)
+    # No round since the leave: no evidence it was this device.
+    assert tracker.current(PHONE, leave + timedelta(seconds=60)) is not None
+    # Its access point couldn't be read in the next round: still no evidence.
+    tracker.update([read("hall", AccessPointError("down")), read("den", poll())], leave + timedelta(seconds=5), TODAY)
+    assert tracker.current(PHONE, leave + timedelta(seconds=60)) is not None
+    # Seen again after the leave (a quick reconnect): it stays home.
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], leave + timedelta(seconds=8), TODAY)
+    assert tracker.current(PHONE, leave + timedelta(seconds=60)) is not None
+
+
+def test_fast_departure_is_off_by_default_and_has_a_floor() -> None:
+    tracker = PresenceTracker(GRACE)
+    tracker.update([read("hall", poll((PHONE, -50)))], T0, TODAY)
+    tracker.note_leave("hall", T0 + timedelta(seconds=5))
+    tracker.update([read("hall", poll())], T0 + timedelta(seconds=8), TODAY)
+    assert tracker.current(PHONE, T0 + timedelta(seconds=120)) is not None  # the grace period
+    assert tracker.away_since(PHONE, T0) == T0 + GRACE
+    assert PresenceTracker(GRACE, fast_departure=timedelta(seconds=1)).fast_departure == timedelta(seconds=10)
+
+
+def test_watch_forever_passes_on_leave_only_when_given() -> None:
+    calls: list[tuple] = []
+
+    class Old(Driver):
+        WATCHES = True
+
+        async def async_watch(self, on_change):  # an older driver without on_leave
+            calls.append(("old",))
+            await asyncio.Event().wait()
+
+    class New(Driver):
+        WATCHES = True
+
+        async def async_watch(self, on_change, on_leave=None):
+            calls.append(("new", on_leave is not None))
+            await asyncio.Event().wait()
+
+    async def main() -> None:
+        tasks = [
+            asyncio.create_task(watch_forever(Old({"host": "x"}), lambda: None)),
+            asyncio.create_task(watch_forever(New({"host": "x"}), lambda: None, on_leave=lambda: None)),
+        ]
+        await asyncio.sleep(0.01)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(main())
+    assert sorted(calls) == [("new", True), ("old",)]
