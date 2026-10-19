@@ -25,7 +25,7 @@ a container for Node-RED and other MQTT users, is an idea on the integration's
 | `mikrotik_ssh` | MikroTik RouterOS (APs, routers with Wi-Fi) | SSH exec, `print terse` of the `wifi` and `wireless` registration tables (signal and uptime of `wireless` from `print stats terse`) | `dBm` |
 | `mikrotik_capsman_ssh` | MikroTik CAP via CAPsMAN: one CAP of a CAPsMAN controller (RouterOS 7, `wifi` package) | SSH exec on the controller: remote CAPs, interfaces and registration table, one read shared by its CAPs; one entry per CAP, by its identity | `dBm` |
 | `cisco_wlc_ssh` | Cisco lightweight APs (9120, 9130, ...) joined to a Catalyst 9800 controller | SSH console of the controller, `show wireless client summary`, plus up to 15 clients' detail per read in turns (signal, connected time); one entry per AP, by AP name | `dBm` |
-| `cisco_wlc_snmp` | The same APs, read over SNMP (v2c or v3) instead of SSH, **experimental** | SNMP: the Airespace client, client statistics and AP tables the 9800 serves, and Cisco's client table (connected time), every client every read; one entry per AP, by AP name | `dBm` |
+| `cisco_wlc_snmp` | The same APs, read over SNMP (v2c or v3) instead of SSH | SNMP: the Airespace client, client statistics and AP tables the 9800 serves, and Cisco's client table (connected time), every client every read; one entry per AP, by AP name | `dBm` |
 | `unifi_network` | UniFi | through a UniFi Network controller connection you pass in (see below) | `dBm` |
 
 More can be added as drivers; see

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.5
+
+- **`cisco_wlc_snmp` is no longer experimental.** Confirmed in Home Assistant on a
+  C9800-CL (IOS-XE 17.15.5, SNMPv3 SHA-256/AES-128) with signal on every client
+  ([wifi-association-presence#10](https://github.com/darek-margas/wifi-association-presence/issues/10)).
+
 ## 0.10.4
 
 From a tester's Home Assistant log

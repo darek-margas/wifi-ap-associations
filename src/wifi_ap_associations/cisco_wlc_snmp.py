@@ -263,7 +263,6 @@ class CiscoWlcSnmp(AccessPointDriver):
     NAME = "Cisco Catalyst 9800 controller (SNMP)"
     MANUFACTURER = "Cisco"
     SIGNAL_UNIT = "dBm"
-    EXPERIMENTAL = True
     REPORTS = frozenset({"name", "location", "model"})
     UNIQUE_FIELD = CONF_AP_NAME
     IDENTITY_FIELDS = ("host", CONF_AP_NAME)

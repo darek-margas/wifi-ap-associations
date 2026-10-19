@@ -68,7 +68,7 @@ CONFIG = {"host": "192.0.2.20", "port": 161, "community": "public-ro"}
 
 def test_registered_as_experimental_with_optional_credentials() -> None:
     assert DRIVERS["cisco_wlc_snmp"] is CiscoWlcSnmp
-    assert CiscoWlcSnmp.EXPERIMENTAL is True
+    assert CiscoWlcSnmp.EXPERIMENTAL is False  # confirmed in Home Assistant in #10
     assert CiscoWlcSnmp.UNIQUE_FIELD == "ap_name"
     assert CiscoWlcSnmp.BLOCKING_IMPORTS == ("pysnmp.hlapi.v3arch.asyncio",)
     fields = {f.key: f for f in CiscoWlcSnmp.FIELDS}
