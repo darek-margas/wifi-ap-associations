@@ -331,3 +331,76 @@ def test_watch_forever_passes_on_leave_only_when_given() -> None:
 
     asyncio.run(main())
     assert sorted(calls) == [("new", True), ("old",)]
+
+
+# --- review of 0.13.0: fast departure edge cases ---
+
+FAST = timedelta(seconds=30)
+S = timedelta(seconds=1)
+
+
+def departed_tracker() -> tuple[PresenceTracker, datetime]:
+    """PHONE on hall, a leave at T0+20, rounds without it: away at T0+50 (settled)."""
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50)), ), read("den", poll())], T0, TODAY)
+    leave = T0 + 20 * S
+    tracker.note_leave("hall", leave)
+    tracker.update([read("hall", poll()), read("den", poll())], leave + 3 * S, TODAY)
+    tracker.update([read("hall", poll()), read("den", poll())], leave + 31 * S, TODAY)  # the deadline poll
+    assert tracker.current(PHONE, leave + 31 * S) is None
+    return tracker, leave
+
+
+def test_a_settled_departure_survives_another_clients_leave() -> None:
+    tracker, leave = departed_tracker()
+    # Another client leaves the same access point; no round since: still away.
+    tracker.note_leave("hall", leave + 40 * S)
+    assert tracker.current(PHONE, leave + 41 * S) is None
+    assert tracker.away_since(PHONE, leave + 41 * S) == leave + FAST
+
+
+def test_a_settled_departure_survives_its_access_point_failing() -> None:
+    tracker, leave = departed_tracker()
+    tracker.update([read("hall", AccessPointError("down")), read("den", poll())], leave + 60 * S, TODAY)
+    assert tracker.current(PHONE, leave + 61 * S) is None
+
+
+def test_a_leave_during_a_slow_round_still_counts() -> None:
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], T0, TODAY)
+    # A round starts at T0+60, reads hall (PHONE still there), then PHONE leaves at
+    # T0+62 while a slow access point holds the round up until T0+70.
+    tracker.note_leave("hall", T0 + 62 * S)
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], T0 + 70 * S, TODAY,
+                   started=T0 + 60 * S)
+    tracker.update([read("hall", poll()), read("den", poll())], T0 + 95 * S, TODAY, started=T0 + 94 * S)
+    # Away 30 s after the leave, not 3 minutes after the last sighting.
+    assert tracker.current(PHONE, T0 + 95 * S) is None
+    assert tracker.away_since(PHONE, T0 + 95 * S) == T0 + 92 * S
+
+
+def test_a_return_after_a_fast_departure_is_a_new_visit() -> None:
+    tracker, leave = departed_tracker()
+    back = leave + 40 * S  # well within the original grace period
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], back, TODAY)
+    sighting = tracker.current(PHONE, back)
+    assert sighting is not None and sighting.arrived == back
+
+
+def test_a_departure_due_between_rounds_is_settled_before_a_return() -> None:
+    # No poll landed exactly at the deadline: the device is back in the next round.
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50)))], T0, TODAY)
+    tracker.note_leave("hall", T0 + 10 * S)
+    tracker.update([read("hall", poll())], T0 + 15 * S, TODAY)
+    assert tracker.current(PHONE, T0 + 41 * S) is None  # away from T0+40
+    tracker.update([read("hall", poll((PHONE, -50)))], T0 + 60 * S, TODAY)
+    assert tracker.current(PHONE, T0 + 60 * S).arrived == T0 + 60 * S
+
+
+def test_a_settled_departure_survives_a_restart() -> None:
+    tracker, leave = departed_tracker()
+    saved = tracker.to_storage(leave + 32 * S, clean=True)
+    again = PresenceTracker(GRACE, fast_departure=FAST)
+    again.restore(saved, leave + 40 * S, TODAY)
+    assert again.current(PHONE, leave + 40 * S) is None

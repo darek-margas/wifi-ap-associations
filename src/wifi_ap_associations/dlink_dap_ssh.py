@@ -209,6 +209,9 @@ class DlinkDapSsh(AccessPointDriver):
     # Instant arrivals from SNMP traps (see the module docstring): the DAP's trap server
     # must be set to this program's address.
     WATCHES = True
+    # Decoding a trap imports pysnmp's protocol modules, which read files: load them
+    # before the event loop runs, not on the first trap.
+    BLOCKING_IMPORTS = ("pyasn1.codec.ber.decoder", "pysnmp.proto.api")
 
     async def async_watch(
         self, on_change: Callable[[], None], on_leave: Callable[[], None] | None = None

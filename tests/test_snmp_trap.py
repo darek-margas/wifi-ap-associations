@@ -188,3 +188,21 @@ def test_real_dap_traps(specific: int, kind: str | None) -> None:
     assert trap.enterprise == "1.3.6.1.4.1.171.10.37.59.5.7.2.0" and trap.specific == specific
     assert trap.varbinds == ((AP_MAC_OID, "f4:8c:eb:00:00:01"),)
     assert trap_kind(trap) == kind
+
+
+def test_trap_decoding_is_preloaded_off_the_event_loop() -> None:
+    import importlib
+
+    # Home Assistant and the bridge import BLOCKING_IMPORTS before polling; decode()
+    # must need nothing else.
+    assert DlinkDapSsh.BLOCKING_IMPORTS
+    for module in DlinkDapSsh.BLOCKING_IMPORTS:
+        importlib.import_module(module)
+    import inspect
+
+    source = inspect.getsource(decode)
+    for line in source.splitlines():
+        if line.strip().startswith(("from ", "import ")):
+            module = line.split()[1]
+            assert any(module == m or m.startswith(module + ".") or module.startswith(m)
+                       for m in DlinkDapSsh.BLOCKING_IMPORTS), module
