@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.3
+
+From a TP-Link EAP670's reports (standalone, without a controller;
+[discussion #4](https://github.com/darek-margas/wifi-association-presence/discussions/4)):
+
+- **Collector, SNMP: MACs written as text are MACs.** TP-Link keeps a table of MACs as
+  text (`AA-BB-CC-DD-EE-FF`); the report took them for ordinary text and, outside the
+  recognised client tables, showed only their length. They are now recognised: the table
+  is listed as a likely client table and its MACs shown redacted with the vendor prefix
+  kept (enough to tell clients from the access point's own radios).
+- **Collector, SSH: "Connection reset by peer" suggests "Allow old SSH algorithms"**, as
+  an algorithm mismatch does: the EAP670 drops the connection instead of saying no
+  algorithm matched.
+
 ## 0.12.2
 
 From a review of 0.12.1, all in the OpenWrt driver:

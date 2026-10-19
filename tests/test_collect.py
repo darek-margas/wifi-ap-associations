@@ -423,3 +423,50 @@ def test_an_ecdsa_p521_only_server_connects_either_way(legacy_ssh: bool) -> None
 
     report = asyncio.run(main())
     assert "ran /system resource print" in report or "ran " in report
+
+
+def test_macs_written_as_text_are_macs() -> None:
+    from pysnmp.proto.rfc1902 import OctetString
+
+    assert collect._format_value(OctetString(b"5C-AD-BA-00-00-01")) == "MAC: 5C:AD:BA:00:00:01"
+    assert collect._format_value(OctetString(b"5c:ad:ba:00:00:01")) == "MAC: 5C:AD:BA:00:00:01"
+    assert collect._format_value(OctetString(b"5C-AD-BA:00-00-01")).startswith("STRING")  # mixed
+    assert collect._format_value(OctetString(b"Living room")) == "STRING: 'Living room'"
+
+
+def test_a_tp_link_text_mac_table_is_a_client_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EAP670 (discussion #4): its vendor tree has a table of MACs written as text, which
+    was taken for ordinary text and shown only as lengths."""
+    import pysnmp.hlapi.v3arch.asyncio as hlapi
+    from pysnmp.proto.rfc1902 import Integer, OctetString
+
+    table = "1.3.6.1.4.1.11863.10.1.1.2.1"
+    macs = ["5C-AD-BA-00-00-01", "A4-83-E7-00-00-02"]
+
+    async def get_cmd(*args, **kwargs):
+        system = ["Linux EAP670", "1.3.6.1.4.1.11863.10.1", "100", "EAP670"]
+        return None, None, 0, [(oid, OctetString(v)) for oid, v in zip(collect.SYSTEM_OIDS.values(), system)]
+
+    async def bulk_walk_cmd(engine, auth, target, context, _n, _r, root, **kwargs):
+        if root == "1.3.6.1.4.1.11863":
+            for i, mac in enumerate(macs, start=1):
+                yield None, None, 0, [(f"{table}.1.{i}", Integer(i))]
+            for i, mac in enumerate(macs, start=1):
+                yield None, None, 0, [(f"{table}.2.{i}", OctetString(mac))]
+
+    monkeypatch.setattr(hlapi, "ObjectIdentity", lambda oid: oid)
+    monkeypatch.setattr(hlapi, "ObjectType", lambda identity: identity)
+    monkeypatch.setattr(hlapi, "get_cmd", get_cmd)
+    monkeypatch.setattr(hlapi, "bulk_walk_cmd", bulk_walk_cmd)
+    report = asyncio.run(collect._collect_snmp_tables(_snmp_args(snmp_max=100), {}, None, None, None, None))
+    text = "\n".join(report)
+    assert f"{table}.2  (index not decoded)  (2 rows)" in text
+    # Shown, redacted with the vendor prefix kept: enough to tell phones from the AP's
+    # own radios, nothing more.
+    assert f"{table}.2.1 = MAC: 5C:AD:BA:XX:XX:01" in text
+    assert f"{table}.2.2 = MAC: A4:83:E7:XX:XX:02" in text
+    assert "00:00:01" not in text and "00:00:02" not in text
+
+
+def test_a_connection_reset_suggests_legacy_ssh() -> None:
+    assert collect.legacy_ssh_hint(ConnectionResetError(104, "Connection reset by peer"))

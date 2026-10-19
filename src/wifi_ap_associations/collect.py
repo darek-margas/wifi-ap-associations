@@ -214,6 +214,8 @@ _MAC = re.compile(r"\b([0-9A-Fa-f]{2})([:-])([0-9A-Fa-f]{2})\2([0-9A-Fa-f]{2})(?
 # Cisco style (aabb.ccdd.eeff) and bare (aabbccddeeff) MACs.
 _MAC_DOTTED = re.compile(r"\b[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\b")
 _MAC_BARE = re.compile(r"\b[0-9A-Fa-f]{12}\b")
+# A whole value that is a MAC written as text, with ":" or "-" throughout.
+_MAC_TEXT = re.compile(r"[0-9A-Fa-f]{2}([:-])[0-9A-Fa-f]{2}(?:\1[0-9A-Fa-f]{2}){4}")
 _IPV4 = re.compile(r"\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b")
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 # 16+ hex digits in one run: keys, password hashes, serials. (MACs have separators.)
@@ -480,7 +482,9 @@ def run_ssh(args: argparse.Namespace) -> str | None:
 def legacy_ssh_hint(err: BaseException) -> bool:
     """Whether a connection error looks like the AP needs the old SSH algorithms."""
     text = str(err).lower()
-    return "no matching" in text or "algorithm" in text
+    # Some APs drop the connection when offered algorithms they don't know instead of
+    # saying so (a TP-Link EAP670 resets it: discussion #4).
+    return "no matching" in text or "algorithm" in text or "reset by peer" in text
 
 
 async def async_collect_ssh_report(
@@ -607,6 +611,10 @@ def _format_value(value) -> str:
             text = octets.decode("utf-8").rstrip("\r\n\0")
         except UnicodeDecodeError:
             text = None
+        if text is not None and _MAC_TEXT.fullmatch(text.strip()):
+            # A MAC written as text (TP-Link: "AA-BB-CC-DD-EE-FF"): a MAC all the same, so
+            # its table is recognised as a client table and it is redacted like one.
+            return "MAC: " + ":".join(re.split(r"[:-]", text.strip())).upper()
         if text is not None and text.isprintable():
             return f"STRING: {text!r}"
         return f"HEX: {octets.hex(' ')}"
