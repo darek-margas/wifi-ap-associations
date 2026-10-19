@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.1
+
+- **Collector: "legacy SSH" no longer drops modern algorithms.** It replaced the default
+  algorithm list with old ones only, without any ECDSA host key, so an access point that
+  offers only ECDSA (a TP-Link EAP670: `ecdsa-sha2-nistp521`) could not be reached with
+  it on. It now adds the old algorithms to the modern ones. Test: a real SSH server with
+  only an ECDSA P-521 host key, collected from with the option off and on.
+
 ## 0.12.0
 
 - **The presence rules move into the library**, from the Home Assistant integration, so

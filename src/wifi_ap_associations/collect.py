@@ -236,17 +236,43 @@ _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 # columns, echoes commands and pads lines; an exec request returns just the output.
 EXEC_PROFILES = frozenset({"mikrotik"})
 
+# "Allow old SSH algorithms": the modern ones plus the old ones some APs still need, so
+# turning it on never loses an algorithm the default offers (an EAP670 with only an
+# ECDSA P-521 host key could not connect with it on: #4 in the discussions).
 LEGACY = {
     "kex_algs": [
         "curve25519-sha256",
+        "curve25519-sha256@libssh.org",
         "ecdh-sha2-nistp256",
+        "ecdh-sha2-nistp384",
+        "ecdh-sha2-nistp521",
+        "diffie-hellman-group-exchange-sha256",
+        "diffie-hellman-group16-sha512",
         "diffie-hellman-group14-sha256",
         "diffie-hellman-group14-sha1",
         "diffie-hellman-group1-sha1",
         "diffie-hellman-group-exchange-sha1",
     ],
-    "server_host_key_algs": ["ssh-ed25519", "rsa-sha2-256", "rsa-sha2-512", "ssh-rsa"],
-    "encryption_algs": ["aes128-ctr", "aes256-ctr", "aes128-cbc", "aes256-cbc", "3des-cbc"],
+    "server_host_key_algs": [
+        "ssh-ed25519",
+        "ecdsa-sha2-nistp256",
+        "ecdsa-sha2-nistp384",
+        "ecdsa-sha2-nistp521",
+        "rsa-sha2-256",
+        "rsa-sha2-512",
+        "ssh-rsa",
+    ],
+    "encryption_algs": [
+        "chacha20-poly1305@openssh.com",
+        "aes128-gcm@openssh.com",
+        "aes256-gcm@openssh.com",
+        "aes128-ctr",
+        "aes192-ctr",
+        "aes256-ctr",
+        "aes128-cbc",
+        "aes256-cbc",
+        "3des-cbc",
+    ],
 }
 
 # --- redaction ----------------------------------------------------------------------

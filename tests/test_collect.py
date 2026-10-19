@@ -382,3 +382,44 @@ def test_mikrotik_profile_runs_each_command_as_ssh_exec(monkeypatch: pytest.Monk
     assert "output of /system identity print" in transcript and "\r" not in transcript
     # The refused /system reboot isn't counted.
     assert f"# finished: {len(PROFILES['mikrotik']) + 1} commands in " in transcript
+
+
+@pytest.mark.parametrize("legacy_ssh", [False, True])
+def test_an_ecdsa_p521_only_server_connects_either_way(legacy_ssh: bool) -> None:
+    """A TP-Link EAP670 offers only an ECDSA P-521 host key; "Allow old SSH algorithms"
+    replaced the modern list and could not connect to it (discussion #4)."""
+    import asyncssh
+
+    from wifi_ap_associations.collect import async_collect_ssh_report
+
+    async def handle(process) -> None:
+        process.stdout.write(f"ran {process.command}\n")
+        process.exit(0)
+
+    class Server(asyncssh.SSHServer):
+        def begin_auth(self, username: str) -> bool:
+            return True
+
+        def password_auth_supported(self) -> bool:
+            return True
+
+        def validate_password(self, username: str, password: str) -> bool:
+            return password == "secret"
+
+    async def main() -> str:
+        server = await asyncssh.create_server(
+            Server, "127.0.0.1", 0,
+            server_host_keys=[asyncssh.generate_private_key("ecdsa-sha2-nistp521")],
+            process_factory=handle,
+        )
+        port = server.sockets[0].getsockname()[1]
+        try:
+            return await async_collect_ssh_report(
+                "127.0.0.1", "admin", "secret", port=port, profile="mikrotik", legacy_ssh=legacy_ssh
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    report = asyncio.run(main())
+    assert "ran /system resource print" in report or "ran " in report
