@@ -404,3 +404,42 @@ def test_a_settled_departure_survives_a_restart() -> None:
     again = PresenceTracker(GRACE, fast_departure=FAST)
     again.restore(saved, leave + 40 * S, TODAY)
     assert again.current(PHONE, leave + 40 * S) is None
+
+
+# --- second review: evidence is taken with its own round's state ---
+
+
+def test_evidence_before_an_access_point_failure_still_counts() -> None:
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], T0, TODAY)
+    leave = T0 + 10 * S
+    tracker.note_leave("hall", leave)
+    # Evidence: hall read after the leave, PHONE missing.
+    tracker.update([read("hall", poll()), read("den", poll())], leave + 5 * S, TODAY)
+    # Then hall fails before the deadline: the evidence stands.
+    tracker.update([read("hall", AccessPointError("down")), read("den", poll())], leave + 35 * S, TODAY)
+    assert tracker.current(PHONE, leave + 35 * S) is None
+    assert tracker.away_since(PHONE, leave + 35 * S) == leave + FAST
+
+
+def test_a_recovering_access_point_is_no_evidence() -> None:
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], T0, TODAY)
+    leave = T0 + 10 * S
+    tracker.note_leave("hall", leave)
+    # hall can't be read after the leave: no evidence the phone left.
+    tracker.update([read("hall", AccessPointError("down")), read("den", poll())], leave + 5 * S, TODAY)
+    tracker.update([read("hall", AccessPointError("down")), read("den", poll())], leave + 40 * S, TODAY)
+    assert tracker.current(PHONE, leave + 40 * S) is not None
+    # hall recovers with the phone on it: the same visit goes on, nothing invented.
+    tracker.update([read("hall", poll((PHONE, -50))), read("den", poll())], leave + 60 * S, TODAY)
+    assert tracker.current(PHONE, leave + 60 * S).arrived == T0
+
+
+def test_a_device_back_before_the_deadline_never_left() -> None:
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50)))], T0, TODAY)
+    tracker.note_leave("hall", T0 + 10 * S)
+    tracker.update([read("hall", poll())], T0 + 15 * S, TODAY)  # evidence, deadline T0+40
+    tracker.update([read("hall", poll((PHONE, -50)))], T0 + 25 * S, TODAY)  # back in time
+    assert tracker.current(PHONE, T0 + 60 * S).arrived == T0

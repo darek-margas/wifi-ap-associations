@@ -22,13 +22,15 @@
   `note_leave(access_point_id, at)`. A device that was on an access point which then
   reported a leave, and which the next successful poll of it didn't see, is away
   `fast_departure` after the report (never under 10 s) instead of after the grace period.
-  `away_since(mac, now)` gives when a device counted as away. A departure a round has
-  settled stays until the device is seen again (another client's leave or its access
-  point failing can't undo it; it is saved with the sightings), a device back after one
-  starts a new visit, and `update(..., started=...)` takes when the round began, so a
+  `away_since(mac, now)` gives when a device counted as away. The evidence (a round that
+  read the access point after a leave and didn't see the device) is taken with that
+  round's own access point states and kept until the device is seen again: the access
+  point failing or recovering later, or another client's leave, changes nothing; it is
+  saved with the sightings. A device back before the deadline never left; back after it,
+  it starts a new visit. `update(..., started=...)` takes when the round began, so a
   leave reported while a slow round was still running isn't taken for older than the
   read that saw the device. Each access point keeps all recent leaves, the earliest
-  unsettled one counting.
+  since the device was last seen counting.
 - D-Link declares the trap decoder's modules in `BLOCKING_IMPORTS`, so programs load them
   before their event loop runs rather than on the first trap.
 

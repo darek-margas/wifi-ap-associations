@@ -77,13 +77,15 @@ class PresenceSnapshot:
 class PresenceTracker:
     """The presence state across poll rounds (see the module docstring).
 
-    Fast departure (opt-in, fast_departure set): a device whose access point reported a
-    client leaving (note_leave(), from a watch's on_leave) after the device was last seen,
-    and which a later successful round of that access point didn't see, is away
-    fast_departure after that report instead of after the grace period. Faster, at a
-    price: a device that drops off for longer than that and comes back (power saving, a
-    reconnect) shows away meanwhile. Access points report a leave without saying which
-    client, so any device missing from that access point after a leave counts.
+    Fast departure (opt-in, fast_departure set): access points report that a client
+    left them (note_leave(), from a watch's on_leave) without saying which. A round that
+    reads such an access point after the report and doesn't see a device that was on it
+    no earlier than the report is evidence that this device left: from then on it is
+    away fast_departure after the earliest such report instead of after the grace period.
+    The evidence is taken with that round's own state and kept: an access point failing
+    or recovering later, or another client's leave, changes nothing; only seeing the
+    device again does (and that starts a new visit). Faster, at a price: a device that
+    drops off for longer than fast_departure and comes back shows away meanwhile.
     """
 
     def __init__(
@@ -101,14 +103,12 @@ class PresenceTracker:
         )
         # Recent reports of a client leaving, per access point (within the grace period).
         self._leaves: dict[str, list[datetime]] = {}
-        # Fast departures decided by a round: away until seen again, whatever is reported
-        # or read afterwards (another client's leave, the access point failing).
-        self._departed: dict[str, datetime] = {}
-        # When each device was last observed: the start of the round that saw it. A round
-        # takes time; a leave reported during it may come after the access point's read.
+        # Fast departure per device, from a round's evidence: when it is (or was) away.
+        # Kept until the device is seen again.
+        self._departs: dict[str, datetime] = {}
+        # When each device was last observed: the start of the round that saw it (the
+        # read happened after that; a leave reported later may still be before the read).
         self._observed: dict[str, datetime] = {}
-        # Start of the last round in which an access point was read.
-        self._last_round_started: datetime | None = None
         self.visit_gap = max(self.consider_home, poll_interval + VISIT_GAP_SLACK)
         self.retention = retention
         self.sightings: dict[str, Sighting] = {}
@@ -131,28 +131,27 @@ class PresenceTracker:
     def restore(self, stored: Mapping[str, Any] | None, now: datetime, today: date) -> None:
         """Load what to_storage() returned before the program last stopped."""
         self.sightings = sightings_from_storage(stored, now, self.retention)
-        self._departed = {}
-        for mac, at in ((stored or {}).get("departed") or {}).items():
+        self._departs = {}
+        for mac, at in ((stored or {}).get("departs") or {}).items():
             try:
                 when = datetime.fromisoformat(at)
             except (TypeError, ValueError):
                 continue
             if mac in self.sightings and when.tzinfo is not None:
-                self._departed[mac] = when
+                self._departs[mac] = when
         self._restored_at = stored_at(stored)
         self._restored_clean = stored_cleanly(stored)
         # Today's coverage counts (roams, drops, late roams) survive a same-day restart.
         self.coverage.restore((stored or {}).get("coverage"), today)
 
     def to_storage(self, now: datetime, clean: bool = False) -> dict[str, Any]:
-        """What to save: the sightings and today's coverage counts, JSON-friendly.
-
-        clean: written as the program stops, so current until now (see presence.py).
-        """
+        """What to save: the sightings, fast departures and today's coverage counts,
+        JSON-friendly. clean: written as the program stops, so current until now (see
+        presence.py)."""
         data = sightings_to_storage(self.sightings, now, clean=clean)
         data["coverage"] = self.coverage.to_storage()
-        if self._departed:
-            data["departed"] = {mac: at.isoformat() for mac, at in self._departed.items()}
+        if self._departs:
+            data["departs"] = {mac: at.isoformat() for mac, at in self._departs.items()}
         return data
 
     def update(
@@ -191,11 +190,7 @@ class PresenceTracker:
             if not ride_out_total_failure(self.last_success, now, self.consider_home):
                 raise AllAccessPointsFailed("None of the access points could be read")
             return self.snapshot()
-        # Departures due by now, from the rounds before this one: settled before this
-        # round's sightings, so a device back now starts a new visit.
-        self._confirm_departures(now)
         self.last_success = now
-        self._last_round_started = started
         self.coverage.update(merged.sightings, merged.failed, now, today, self.consider_home)
         self.access_point_coverage = access_point_coverage(merged.sightings)
 
@@ -204,14 +199,19 @@ class PresenceTracker:
             # First round after a restart (see restart_visit_gap).
             visit_gap = restart_visit_gap(visit_gap, self._restored_at, self._restored_clean, now)
             self._restored_at = None
-        # A device that departed (fast) and is seen again arrives anew.
-        previous = {mac: s for mac, s in self.sightings.items() if mac not in self._departed}
+        # A device seen again after it was away by fast departure arrives anew.
+        previous = {
+            mac: s
+            for mac, s in self.sightings.items()
+            if not ((at := self._departs.get(mac)) and at <= now)
+        }
         seen = carry_visits(merged.sightings, previous, now, visit_gap)
         for mac in seen:
-            self._departed.pop(mac, None)
+            self._departs.pop(mac, None)
             self._observed[mac] = started
         self.sightings = prune({**self.sightings, **seen}, now, self.retention)
-        self._departed = {m: at for m, at in self._departed.items() if m in self.sightings}
+        self._take_departure_evidence(merged, started, seen)
+        self._departs = {m: at for m, at in self._departs.items() if m in self.sightings}
         self._observed = {m: at for m, at in self._observed.items() if m in self.sightings}
         # Reports older than the grace period can't shorten anything any more.
         self._leaves = {
@@ -219,58 +219,41 @@ class PresenceTracker:
             for ap, times in self._leaves.items()
             if (kept := [at for at in times if now - at < self.consider_home])
         }
-        # Departures this round settles (missing from an access point read after a leave).
-        self._confirm_departures(now)
         return self.snapshot()
 
-    def _confirm_departures(self, now: datetime) -> None:
+    def _take_departure_evidence(
+        self, merged: Any, started: datetime, seen: Mapping[str, Sighting]
+    ) -> None:
+        """This round's evidence: devices missing from an access point it read after a
+        reported leave (with this round's own access point states)."""
+        if self.fast_departure is None:
+            return
+        read = set(merged.states)  # access points this round read
         for mac, sighting in self.sightings.items():
-            if mac not in self._departed and (gone := self._left_fast(mac, sighting, now)):
-                self._departed[mac] = gone
+            if mac in seen or mac in self._departs or sighting.access_point_id not in read:
+                continue
+            observed = self._observed.get(mac, sighting.last_seen)
+            leaves = [
+                at
+                for at in self._leaves.get(sighting.access_point_id, ())
+                if observed <= at < started
+            ]
+            if leaves:
+                self._departs[mac] = min(leaves) + self.fast_departure
 
     def note_leave(self, access_point_id: str, at: datetime) -> None:
         """An access point reported that a client left it (for fast departure)."""
         self._leaves.setdefault(access_point_id, []).append(at)
 
-    def _left_fast(self, mac: str, sighting: Sighting, now: datetime) -> datetime | None:
-        """When the device counts as away by fast departure (not yet settled), or None.
-
-        Its access point reported a leave no earlier than the device was last observed,
-        a round that started after that report read the access point and didn't see the
-        device, and fast_departure has passed since the report.
-        """
-        if self.fast_departure is None:
-            return None
-        state = self.access_points.get(sighting.access_point_id)
-        if (
-            self.last_success is None
-            or self._last_round_started is None
-            or sighting.last_seen >= self.last_success  # seen in the latest round
-            or state is None
-            or not state.available  # its access point wasn't read: no evidence
-        ):
-            return None
-        observed = self._observed.get(mac, sighting.last_seen)
-        leaves = [
-            at
-            for at in self._leaves.get(sighting.access_point_id, ())
-            if observed <= at < self._last_round_started
-        ]
-        if not leaves:
-            return None
-        gone = min(leaves) + self.fast_departure
-        return gone if now >= gone else None
-
     def current(self, mac: str | None, now: datetime) -> Sighting | None:
-        """The MAC's sighting if it is home (within the grace period, and not gone by
+        """The MAC's sighting if it is home (within the grace period, and not away by
         fast departure), else None."""
         if not mac:
             return None
         sighting = self.sightings.get(mac)
         if not is_present(sighting, now, self.consider_home):
             return None
-        assert sighting is not None
-        if mac in self._departed or self._left_fast(mac, sighting, now):
+        if (at := self._departs.get(mac)) is not None and now >= at:
             return None
         return sighting
 
@@ -279,8 +262,9 @@ class PresenceTracker:
         sighting = self.sightings.get(mac)
         if sighting is None:
             return None
-        fast = self._departed.get(mac) or self._left_fast(mac, sighting, now)
-        return fast or sighting.last_seen + self.consider_home
+        at = self._departs.get(mac)
+        grace = sighting.last_seen + self.consider_home
+        return at if at is not None and at <= now and at < grace else grace
 
 
 async def poll_all(drivers: Sequence[AccessPointDriver]) -> list[PollResult | BaseException]:
