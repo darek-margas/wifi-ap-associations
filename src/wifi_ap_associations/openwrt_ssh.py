@@ -17,13 +17,37 @@ give the name, model, firmware, uptime and memory.
 
 One SSH command per poll runs all of it and marks each section, so the console
 dialogue of the D-Link driver isn't needed: OpenWrt's dropbear runs commands directly.
+
+Instant arrivals (async_watch) follow hostapd's ubus notifications. Seen on OpenWrt
+25.12.5 and 22.03.7 (VMs with simulated radios), one JSON line per event:
+
+    ubus subscribe hostapd.phy0-ap0
+    { "probe": {"address": "02:00:00:00:01:00", "ifname": "phy0-ap0", ...} }
+    { "auth": {"address": "02:00:00:00:01:00", ...} }
+    { "assoc": {"address": "02:00:00:00:01:00", ...} }
+    { "sta-authorized": {"address": "02:00:00:00:01:00", "ifname": "phy0-ap0", ...} }
+    { "deauth": {...} }   { "disassoc": {...} }   (leaving)
+
+22.03 sends no "sta-authorized" (and no "ifname"). "probe" comes from any device
+scanning nearby. When hostapd restarts (a Wi-Fi reload), its objects get new ids and a
+running subscribe goes silent without ending; `ubus listen ubus.object.add
+ubus.object.remove` reports that as it happens, and the watch subscribes again.
+
+A ubus subscribe or listen whose SSH session ends keeps running on the router (dropbear
+doesn't stop it, and it never writes once its object is gone), so each one runs inside
+a shell that prints an empty line every WATCH_HEARTBEAT_SECONDS: once the session is
+gone that write fails and the shell stops the ubus command and exits.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 import json
+import logging
 import re
+import time
 from typing import Any
 
 import asyncssh
@@ -68,6 +92,23 @@ OPENWRT_SSH_POLICY = SshPolicy(
 )
 
 COMMAND_TIMEOUT = 20
+_LOGGER = logging.getLogger(__name__)
+
+# Instant arrivals. A client counts once authorized ("sta-authorized"); hostapd builds
+# without that event (22.03) only say "assoc", which comes before the key handshake, so
+# a poll then could find the client not yet authorized: it waits WATCH_ASSOC_DELAY.
+WATCH_LIST_COMMAND = "ubus list 'hostapd.*'"
+WATCH_OBJECTS_COMMAND = "ubus listen ubus.object.add ubus.object.remove"
+WATCH_ARRIVAL = "sta-authorized"
+WATCH_ASSOC = "assoc"
+WATCH_ASSOC_DELAY = 2.0
+# hostapd removes and adds its objects within a few seconds on a reload: wait this long
+# after a change before subscribing to what is there then.
+WATCH_SETTLE_SECONDS = 2.0
+WATCH_HEARTBEAT_SECONDS = 15
+# Dropbear answers the SSH keepalive (unlike RouterOS): a dead connection is noticed
+# within about a minute and a half.
+WATCH_KEEPALIVE = {"keepalive_interval": 30, "keepalive_count_max": 3}
 MARK = "@@wap@@"
 # One command, every section marked: board, info, then status and clients per radio.
 POLL_COMMAND = (
@@ -220,6 +261,149 @@ def parse_poll(output: str) -> PollResult:
     return PollResult(clients, parse_info(board, info))
 
 
+
+def _self_cleaning(command: str) -> str:
+    """The command, stopped by the router once the SSH session is gone (see above)."""
+    return (
+        f"{command} & p=$!; trap 'kill $p 2>/dev/null' EXIT; trap exit HUP INT TERM PIPE; "
+        f"while kill -0 $p 2>/dev/null; do sleep {WATCH_HEARTBEAT_SECONDS}; echo; done"
+    )
+
+
+@asynccontextmanager
+async def _remote(conn: Any, command: str) -> AsyncIterator[Any]:
+    """A long-running command; leaving closes its channel without waiting for the
+    router, which ends the command at its next heartbeat."""
+    process = await conn.create_process(
+        _self_cleaning(command), encoding="utf-8", errors="replace"
+    )
+    try:
+        yield process
+    finally:
+        process.close()
+
+
+class _Arrivals:
+    """Which hostapd notifications are a client joining; calls on_change() for them."""
+
+    def __init__(self, on_change: Callable[[], None]) -> None:
+        self._on_change = on_change
+        self._authorized_at: dict[str, float] = {}
+
+    def line(self, line: str) -> None:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return
+        if not isinstance(event, dict) or len(event) != 1:
+            return
+        ((kind, data),) = event.items()
+        if kind not in (WATCH_ARRIVAL, WATCH_ASSOC) or not isinstance(data, dict):
+            return
+        mac = str(data.get("address", ""))
+        if kind == WATCH_ARRIVAL:
+            self._authorized_at[mac] = time.monotonic()
+            _LOGGER.debug("hostapd: %s authorized on %s, polling", mac, data.get("ifname", "?"))
+            self._on_change()
+            return
+        # "assoc": poll a moment later, unless "sta-authorized" came meanwhile.
+        asyncio.get_running_loop().call_later(
+            WATCH_ASSOC_DELAY, self._after_assoc, mac, time.monotonic()
+        )
+
+    def _after_assoc(self, mac: str, assoc_at: float) -> None:
+        if self._authorized_at.get(mac, -1.0) >= assoc_at:
+            return
+        _LOGGER.debug("hostapd: %s associated (no authorized event), polling", mac)
+        self._on_change()
+
+
+async def _watch_hostapd(conn: Any, host: str, on_change: Callable[[], None]) -> None:
+    """Follow hostapd's notifications on one connection, subscribing again whenever its
+    ubus objects change (a Wi-Fi reload). Returns only by raising."""
+    arrivals = _Arrivals(on_change)
+    object_changed = asyncio.Event()
+
+    async with _remote(conn, WATCH_OBJECTS_COMMAND) as objects:
+
+        async def follow_objects() -> None:
+            while line := await objects.stdout.readline():
+                if '"hostapd.' in line:
+                    _LOGGER.debug("%s: hostapd objects changed: %s", host, line.strip())
+                    object_changed.set()
+            raise AccessPointError(f"{host}: the ubus object feed ended")
+
+        watcher = asyncio.ensure_future(follow_objects())
+        try:
+            reloaded = False
+            while True:
+                object_changed.clear()
+                listed = await asyncio.wait_for(
+                    conn.run(WATCH_LIST_COMMAND, check=False, encoding="utf-8", errors="replace"),
+                    COMMAND_TIMEOUT,
+                )
+                names = [name for name in (listed.stdout or "").split() if name.startswith("hostapd.")]
+                if names:
+                    _LOGGER.debug("%s: watching %s", host, ", ".join(names))
+                    if reloaded:
+                        on_change()  # clients rejoin after a reload; one may be missed
+                    await _follow_until(conn, host, names, arrivals, object_changed, watcher)
+                else:
+                    _LOGGER.debug("%s: no hostapd interface on ubus, waiting for one", host)
+                    await _first(object_changed.wait(), watcher)
+                reloaded = True
+                await asyncio.sleep(WATCH_SETTLE_SECONDS)
+        finally:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+
+
+async def _first(waiting: Any, watcher: asyncio.Future[None]) -> None:
+    """Wait for `waiting`, or raise what ends the object watcher first."""
+    task = asyncio.ensure_future(waiting)
+    try:
+        await asyncio.wait({task, watcher}, return_when=asyncio.FIRST_COMPLETED)
+        if watcher.done():
+            watcher.result()  # raises
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _follow_until(
+    conn: Any,
+    host: str,
+    names: list[str],
+    arrivals: _Arrivals,
+    object_changed: asyncio.Event,
+    watcher: asyncio.Future[None],
+) -> None:
+    """Subscribe to these hostapd objects until they change; raise if the feed ends."""
+    command = "ubus subscribe " + " ".join(names)
+    async with _remote(conn, command) as process:
+
+        async def follow() -> None:
+            while line := await process.stdout.readline():
+                if line.strip():
+                    if '"probe"' not in line:
+                        _LOGGER.debug("%s: hostapd event: %s", host, line.strip())
+                    arrivals.line(line)
+            if not object_changed.is_set():
+                raise AccessPointError(f"{host}: the hostapd event feed ended")
+
+        following = asyncio.ensure_future(follow())
+        changed = asyncio.ensure_future(object_changed.wait())
+        try:
+            await asyncio.wait({following, changed, watcher}, return_when=asyncio.FIRST_COMPLETED)
+            for task in (following, watcher):
+                if task.done() and not task.cancelled() and task.exception():
+                    raise task.exception()  # type: ignore[misc]
+        finally:
+            for task in (following, changed):
+                task.cancel()
+            await asyncio.gather(following, changed, return_exceptions=True)
+
+
 @register
 class OpenWrtSsh(AccessPointDriver):
     """OpenWrt (or any hostapd + ubus system) over SSH."""
@@ -250,6 +434,26 @@ class OpenWrtSsh(AccessPointDriver):
         if "ubus" in output and "not found" in output:
             raise AccessPointError(f"{self.config['host']}: ubus is not available")
         return parse_poll(output)
+
+    WATCHES = True
+
+    async def async_watch(self, on_change: Callable[[], None]) -> None:
+        """Call on_change() when a client joins any hostapd interface of the AP."""
+        host = self.config["host"]
+        try:
+            async with asyncssh.connect(
+                host,
+                port=int(self.config.get("port") or 22),
+                username=self.config["username"],
+                password=self.config["password"],
+                **self.SSH_POLICY.connect_options(),
+                **WATCH_KEEPALIVE,
+            ) as conn:
+                await _watch_hostapd(conn, host, on_change)
+        except asyncssh.PermissionDenied as err:
+            raise AccessPointAuthError(f"{host}: login rejected") from err
+        except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
+            raise AccessPointError(f"{host}: {err!r}") from err
 
     async def _run(self, command: str) -> str:
         try:

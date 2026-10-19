@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.1
+
+- **Instant arrivals for OpenWrt.** `openwrt_ssh` has `WATCHES = True`: `async_watch()`
+  follows hostapd's ubus notifications (`ubus subscribe` on every `hostapd.*` object,
+  one SSH connection) and calls `on_change()` when a client is authorized
+  (`sta-authorized`), or 2 s after `assoc` on hostapd builds without that event
+  (OpenWrt 22.03). Probes and leaving count for nothing.
+- A Wi-Fi reload gives hostapd's objects new ids and leaves a running subscribe silent
+  without ending it; the watch also follows `ubus listen ubus.object.add
+  ubus.object.remove` and subscribes again (with one `on_change()`, as clients rejoin).
+- A ubus command whose SSH session ends keeps running on the router, so each runs in a
+  shell that prints an empty line every 15 s and stops it once that write fails:
+  nothing is left behind by a dropped connection.
+- Built and checked against OpenWrt 25.12.5 and 22.03.7 in VMs with simulated radios:
+  joins, leaves, an AP reload, and nothing left running afterwards. Dropbear answers the
+  SSH keepalive, so it stays on.
+
 ## 0.11.0
 
 - **Instant arrivals for UniFi.** `unifi_network` has `WATCHES = True`: `async_watch()`
