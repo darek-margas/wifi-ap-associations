@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.11.1"
+__version__ = "0.11.2"
 
 
 class AccessPointError(Exception):
@@ -212,6 +212,7 @@ from . import (  # noqa: E402, F401
     dlink_dap_ssh,
     mikrotik_capsman_ssh,
     mikrotik_ssh,
+    omada_network,
     openwrt_ssh,
     unifi_network,
 )

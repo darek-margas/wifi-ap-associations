@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.2
+
+- **New driver `omada_network`, experimental: TP-Link Omada access points** through an
+  Omada controller connection passed in as `OmadaSource` (as for UniFi). Clients from
+  the controller's connected client list: AP (`apMac`), SSID, band (`radioId` 0 =
+  2.4 GHz, 1 and 2 = 5 GHz, 3 = 6 GHz), signal (`rssi`, dBm) and connected time
+  (`uptime`); the AP's name, model, firmware, uptime (`uptimeLong`), CPU and memory
+  from its device record; an AP the controller doesn't show as connected is
+  unavailable. Written from Home Assistant's tplink_omada test fixtures and
+  tplink-omada-client 1.5, not yet run on a real controller.
+
 ## 0.11.1
 
 - **Instant arrivals for OpenWrt.** `openwrt_ssh` has `WATCHES = True`: `async_watch()`

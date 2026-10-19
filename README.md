@@ -27,6 +27,7 @@ a container for Node-RED and other MQTT users, is an idea on the integration's
 | `cisco_wlc_ssh` | Cisco lightweight APs (9120, 9130, ...) joined to a Catalyst 9800 controller | SSH console of the controller, `show wireless client summary`, plus up to 15 clients' detail per read in turns (signal, connected time); one entry per AP, by AP name | `dBm` |
 | `cisco_wlc_snmp` | The same APs, read over SNMP (v2c or v3) instead of SSH | SNMP: the Airespace client, client statistics and AP tables the 9800 serves, and Cisco's client table (connected time), every client every read; one entry per AP, by AP name | `dBm` |
 | `unifi_network` | UniFi | through a UniFi Network controller connection you pass in (see below) | `dBm` |
+| `omada_network` | TP-Link Omada access points (EAP), **experimental** | through an Omada controller connection you pass in (see below) | `dBm` |
 
 More can be added as drivers; see
 [Help add your access point](https://github.com/darek-margas/wifi-association-presence#help-add-your-access-point).
@@ -100,6 +101,14 @@ second argument, which implements `UnifiSource`
 (`async_get_device(mac)` and `async_get_clients(mac)`, returning the controller's device
 and client records). In Home Assistant that is the UniFi Network integration's
 connection; elsewhere, wrap your own controller client.
+
+### TP-Link Omada
+
+The same for Omada (experimental): `OmadaSource` with `async_get_device(mac)` and
+`async_get_clients(mac)`, returning the controller's device records and its connected
+client records as [tplink-omada-client](https://pypi.org/project/tplink-omada-client/)
+gives them (`raw_data`). In Home Assistant that is the TP-Link Omada integration's
+connection.
 
 ## Command-line tools
 
