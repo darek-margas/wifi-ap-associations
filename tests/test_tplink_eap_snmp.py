@@ -87,6 +87,19 @@ def test_no_clients_is_an_empty_ap() -> None:
     assert result.clients == []
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [
+        {},  # the count says 11, the table answers nothing
+        {"1": b"not a mac", "2": b"34.85.18.00.00.01"},  # rows in a form not known here
+    ],
+)
+def test_a_count_without_readable_macs_fails_the_read(rows) -> None:
+    # Not an empty AP: that would send all 11 clients away.
+    with pytest.raises(AccessPointError, match="counts 11 client"):
+        parse({**EAP670, CLIENT_MACS: rows})
+
+
 def test_a_device_without_the_table_is_an_error() -> None:
     with pytest.raises(AccessPointError, match="no TP-Link EAP client table"):
         parse({SYS_DESCR: EAP670[SYS_DESCR], SYS_NAME: EAP670[SYS_NAME]})

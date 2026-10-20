@@ -17,7 +17,8 @@ the model is in sysDescr, "Linux EAP670 4.4.60 ..."). SNMP v2c with a community,
 with a user and keys, as for the Cisco SNMP driver.
 
 An agent without the count isn't an EAP with this table (another model or firmware):
-that is an error, rather than an AP that always looks empty.
+that is an error, rather than an AP that always looks empty. So is a positive count with
+no readable MAC in the table: an empty AP would send every client away.
 """
 
 from __future__ import annotations
@@ -88,6 +89,14 @@ def parse(columns: dict[str, dict[str, Any]]) -> PollResult:
             "be another model, or need different firmware"
         )
     macs = {mac for value in columns.get(CLIENT_MACS, {}).values() if (mac := client_mac(value))}
+    count = next(iter(columns[CLIENT_COUNT].values()))
+    if not macs and isinstance(count, int) and count > 0:
+        # Clients the table doesn't show (unreadable rows, or MACs in a form not known
+        # here): failing keeps them home within the grace period, where an empty AP would
+        # send them all away. (A client that leaves between the two walks fails one read.)
+        raise AccessPointError(
+            f"the EAP counts {count} client(s) but its client table gave no readable MAC"
+        )
     descr = _text(next(iter(columns.get(SYS_DESCR, {}).values()), None))
     name = _text(next(iter(columns.get(SYS_NAME, {}).values()), None))
     return PollResult(

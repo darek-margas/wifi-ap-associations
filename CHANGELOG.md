@@ -9,8 +9,10 @@
   (`...10.1.1.2.1.2`). Both matched the clients connected in two reports of an EAP670
   (firmware 1.3.13), 9 and then 11. Presence and which AP only: the table has no SSID,
   band, signal or connected time. Name and model from the system group. A device
-  without the table is an error, not an AP that always looks empty. Checked with the
-  real pysnmp against a simulated EAP670 (v2c).
+  without the table is an error, not an AP that always looks empty, and so is a
+  positive count with no readable MAC (an empty AP would send every client away).
+  Checked with the real pysnmp against a simulated EAP670 (v2c), also one counting 11
+  clients with no MAC rows.
 - **`AccessPointDriver.CLIENT_DETAILS`:** which of a client's band and signal a driver
   fills in (both by default; none for `tplink_eap_snmp`), so a program can leave out
   per-band counts and signal sensors that would always read zero.
