@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from typing import Any
 
 from . import (
@@ -255,46 +256,24 @@ def _python_value(value: Any) -> Any:
         return _int(value)
 
 
-@register
-class CiscoWlcSnmp(AccessPointDriver):
-    """A lightweight AP joined to a Cisco Catalyst 9800 controller, read over SNMP."""
+# The settings of any SNMP driver after host and port (the TP-Link EAP driver shares them).
+SNMP_FIELDS = (
+    # Which credentials count; the other version's may stay stored, unused, so
+    # switching version needs no clearing of fields.
+    DriverField("snmp_version", default="v2c", choices=SNMP_VERSIONS),
+    DriverField("community", secret=True, optional=True),
+    DriverField("username", optional=True),
+    DriverField("auth_key", secret=True, optional=True),
+    DriverField("auth_protocol", default="sha", choices=tuple(SNMP_AUTH)),
+    DriverField("priv_key", secret=True, optional=True),
+    DriverField("priv_protocol", default="aes", choices=tuple(SNMP_PRIV)),
+)
 
-    TYPE = "cisco_wlc_snmp"
-    NAME = "Cisco Catalyst 9800 controller (SNMP)"
-    MANUFACTURER = "Cisco"
-    SIGNAL_UNIT = "dBm"
-    REPORTS = frozenset({"name", "location", "model"})
-    UNIQUE_FIELD = CONF_AP_NAME
-    IDENTITY_FIELDS = ("host", CONF_AP_NAME)
-    BLOCKING_IMPORTS = ("pysnmp.hlapi.v3arch.asyncio",)
-    FIELDS = (
-        DriverField("host"),
-        DriverField("port", default=161),
-        DriverField(CONF_AP_NAME),
-        # Which credentials count; the other version's may stay stored, unused, so
-        # switching version needs no clearing of fields.
-        DriverField("snmp_version", default="v2c", choices=SNMP_VERSIONS),
-        DriverField("community", secret=True, optional=True),
-        DriverField("username", optional=True),
-        DriverField("auth_key", secret=True, optional=True),
-        DriverField("auth_protocol", default="sha", choices=tuple(SNMP_AUTH)),
-        DriverField("priv_key", secret=True, optional=True),
-        DriverField("priv_protocol", default="aes", choices=tuple(SNMP_PRIV)),
-    )
 
-    async def async_get_associated_clients(self) -> list[AssociatedClient]:
-        """Clients associated to this AP."""
-        return (await self.async_poll()).clients
+class SnmpCredentials:
+    """v2c or v3 credentials from SNMP_FIELDS, for drivers that read over SNMP."""
 
-    async def async_poll(self) -> PollResult:
-        """This AP's clients and details, from a controller read shared with its other APs."""
-        key = tuple(
-            str(self.config.get(field.key) or "")
-            for field in self.FIELDS
-            if field.key != CONF_AP_NAME
-        )
-        data = await _shared.read(key, lambda: self._read_controller(key))
-        return poll_result(data, str(self.config[CONF_AP_NAME]).strip())
+    config: dict[str, Any]
 
     def _version(self) -> str:
         """The SNMP version; settings saved before it was a setting: v3 if a user is set."""
@@ -328,6 +307,40 @@ class CiscoWlcSnmp(AccessPointDriver):
         if community := self.config.get("community"):
             return hlapi.CommunityData(community, mpModel=1)
         raise AccessPointAuthError("SNMP v2c needs a community")
+
+
+@register
+class CiscoWlcSnmp(SnmpCredentials, AccessPointDriver):
+    """A lightweight AP joined to a Cisco Catalyst 9800 controller, read over SNMP."""
+
+    TYPE = "cisco_wlc_snmp"
+    NAME = "Cisco Catalyst 9800 controller (SNMP)"
+    MANUFACTURER = "Cisco"
+    SIGNAL_UNIT = "dBm"
+    REPORTS = frozenset({"name", "location", "model"})
+    UNIQUE_FIELD = CONF_AP_NAME
+    IDENTITY_FIELDS = ("host", CONF_AP_NAME)
+    BLOCKING_IMPORTS = ("pysnmp.hlapi.v3arch.asyncio",)
+    FIELDS = (
+        DriverField("host"),
+        DriverField("port", default=161),
+        DriverField(CONF_AP_NAME),
+        *SNMP_FIELDS,
+    )
+
+    async def async_get_associated_clients(self) -> list[AssociatedClient]:
+        """Clients associated to this AP."""
+        return (await self.async_poll()).clients
+
+    async def async_poll(self) -> PollResult:
+        """This AP's clients and details, from a controller read shared with its other APs."""
+        key = tuple(
+            str(self.config.get(field.key) or "")
+            for field in self.FIELDS
+            if field.key != CONF_AP_NAME
+        )
+        data = await _shared.read(key, lambda: self._read_controller(key))
+        return poll_result(data, str(self.config[CONF_AP_NAME]).strip())
 
     async def _read_controller(self, key: tuple[str, ...]) -> ControllerData:
         import pysnmp.hlapi.v3arch.asyncio as hlapi
@@ -382,9 +395,17 @@ class CiscoWlcSnmp(AccessPointDriver):
 
 
 async def _walk(
-    hlapi: Any, engine: Any, auth: Any, target: Any, context: Any, column: str
+    hlapi: Any,
+    engine: Any,
+    auth: Any,
+    target: Any,
+    context: Any,
+    column: str,
+    row_key: Callable[[str, str], str | None] | None = None,
 ) -> dict[str, Any]:
-    """One column as {row MAC: value}; any SNMP error raises, so no table is partial."""
+    """One column as {row: value}, rows by row_key(oid, column) (default: the MAC in
+    the index); any SNMP error raises, so no table is partial."""
+    row_key = row_key or _row_mac
     rows: dict[str, Any] = {}
     async for error, status, _index, binds in hlapi.bulk_walk_cmd(
         engine, auth, target, context, 0, 25,
@@ -397,11 +418,11 @@ async def _walk(
                 raise AccessPointAuthError(f"SNMPv3 user or keys rejected: {text}")
             raise AccessPointError(
                 f"SNMP: {text}; check the address, the community or user, and that SNMP "
-                "is enabled on the controller"
+                "is enabled on the device"
             )
         if status:
             raise AccessPointError(f"SNMP error: {status.prettyPrint()}")
         for oid, value in binds:
-            if (mac := _row_mac(str(oid), column)) is not None:
-                rows[mac] = _python_value(value)
+            if (row := row_key(str(oid), column)) is not None:
+                rows[row] = _python_value(value)
     return rows

@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 
 class AccessPointError(Exception):
@@ -109,6 +109,10 @@ class AccessPointDriver(ABC):
     )
     """AccessPointInfo fields this driver can report. Sensors for the others (e.g. a
     location an AP has no setting for) are not created. Defaults to all of them."""
+    CLIENT_DETAILS: ClassVar[frozenset[str]] = frozenset({"band", "signal"})
+    """Which of AssociatedClient's band and signal this driver fills in. Per-band client
+    counts and signal sensors are not created for an AP whose driver gives neither (e.g.
+    a client table of MACs only)."""
     EXPERIMENTAL: ClassVar[bool] = False
     """Not yet confirmed on real hardware: shown as experimental in the type list.
     Drivers are separate files, so an experimental one can ship in a release without
@@ -218,6 +222,7 @@ from . import (  # noqa: E402, F401
     mikrotik_ssh,
     omada_network,
     openwrt_ssh,
+    tplink_eap_snmp,
     unifi_network,
 )
 

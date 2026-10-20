@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.13.1
+
+- **New driver `tplink_eap_snmp`, experimental:** TP-Link EAP access points running
+  standalone, without an Omada controller, over SNMP v2c or v3. Their command line has no
+  way to list clients, but TP-Link's own MIB does: a client count
+  (`1.3.6.1.4.1.11863.10.1.1.1.0`) and a table of the clients' MACs as text
+  (`...10.1.1.2.1.2`). Both matched the clients connected in two reports of an EAP670
+  (firmware 1.3.13), 9 and then 11. Presence and which AP only: the table has no SSID,
+  band, signal or connected time. Name and model from the system group. A device
+  without the table is an error, not an AP that always looks empty. Checked with the
+  real pysnmp against a simulated EAP670 (v2c).
+- **`AccessPointDriver.CLIENT_DETAILS`:** which of a client's band and signal a driver
+  fills in (both by default; none for `tplink_eap_snmp`), so a program can leave out
+  per-band counts and signal sensors that would always read zero.
+- The Cisco SNMP driver's credentials (`SNMP_FIELDS`, `SnmpCredentials`) and column walk
+  are shared with it; the Cisco driver is unchanged.
+
 ## 0.13.0
 
 - **Instant arrivals for D-Link DAP, through SNMP traps.** `dlink_dap_ssh` has

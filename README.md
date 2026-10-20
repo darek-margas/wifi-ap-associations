@@ -30,6 +30,7 @@ built on it, as a container for Node-RED and other MQTT users, is on the integra
 | `cisco_wlc_snmp` | The same APs, read over SNMP (v2c or v3) instead of SSH | SNMP: the Airespace client, client statistics and AP tables the 9800 serves, and Cisco's client table (connected time), every client every read; one entry per AP, by AP name | `dBm` |
 | `unifi_network` | UniFi | through a UniFi Network controller connection you pass in (see below) | `dBm` |
 | `omada_network` | TP-Link Omada access points (EAP), **experimental** | through an Omada controller connection you pass in (see below) | `dBm` |
+| `tplink_eap_snmp` | TP-Link EAP running standalone (no controller), **experimental** | SNMP (v2c or v3): TP-Link's client table, MACs only (no SSID, band or signal) | — |
 
 More can be added as drivers; see
 [Help add your access point](https://github.com/darek-margas/wifi-association-presence#help-add-your-access-point).
