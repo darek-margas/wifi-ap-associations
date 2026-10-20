@@ -30,7 +30,9 @@
   it starts a new visit. `update(..., started=...)` takes when the round began, so a
   leave reported while a slow round was still running isn't taken for older than the
   read that saw the device. Each access point keeps all recent leaves, the earliest
-  since the device was last seen counting.
+  since the device was last seen counting. `pending_departures(now)` lists the deadlines still
+  ahead, for a program to book its polls at after `restore()`; saved deadlines are
+  ignored when restoring with fast departure off.
 - D-Link declares the trap decoder's modules in `BLOCKING_IMPORTS`, so programs load them
   before their event loop runs rather than on the first trap.
 

@@ -443,3 +443,35 @@ def test_a_device_back_before_the_deadline_never_left() -> None:
     tracker.update([read("hall", poll())], T0 + 15 * S, TODAY)  # evidence, deadline T0+40
     tracker.update([read("hall", poll((PHONE, -50)))], T0 + 25 * S, TODAY)  # back in time
     assert tracker.current(PHONE, T0 + 60 * S).arrived == T0
+
+
+# --- third review: pending deadlines across a restart ---
+
+
+def pending_tracker() -> tuple[PresenceTracker, datetime]:
+    """PHONE missing from hall after a leave at T0+10: deadline T0+40, saved at T0+20."""
+    tracker = PresenceTracker(GRACE, fast_departure=FAST)
+    tracker.update([read("hall", poll((PHONE, -50)))], T0, TODAY)
+    tracker.note_leave("hall", T0 + 10 * S)
+    tracker.update([read("hall", poll())], T0 + 15 * S, TODAY)
+    return tracker, T0 + 40 * S
+
+
+def test_saved_deadlines_are_ignored_with_fast_departure_off() -> None:
+    tracker, deadline = pending_tracker()
+    saved = tracker.to_storage(T0 + 20 * S, clean=True)
+    off = PresenceTracker(GRACE)
+    off.restore(saved, T0 + 25 * S, TODAY)
+    assert off.pending_departures(T0 + 25 * S) == []
+    assert off.current(PHONE, deadline + S) is not None  # the grace period applies
+    assert off.away_since(PHONE, T0 + GRACE + S) == T0 + GRACE
+
+
+def test_pending_deadlines_survive_a_restart_to_be_polled_at() -> None:
+    tracker, deadline = pending_tracker()
+    assert tracker.pending_departures(T0 + 20 * S) == [deadline]
+    again = PresenceTracker(GRACE, fast_departure=FAST)
+    again.restore(tracker.to_storage(T0 + 20 * S, clean=True), T0 + 25 * S, TODAY)
+    assert again.pending_departures(T0 + 25 * S) == [deadline]
+    assert again.pending_departures(deadline) == []  # due: nothing left to book
+    assert again.current(PHONE, deadline) is None

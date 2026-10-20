@@ -132,7 +132,9 @@ class PresenceTracker:
         """Load what to_storage() returned before the program last stopped."""
         self.sightings = sightings_from_storage(stored, now, self.retention)
         self._departs = {}
-        for mac, at in ((stored or {}).get("departs") or {}).items():
+        # Deadlines saved while fast departure was on mean nothing with it off.
+        saved = (stored or {}).get("departs") if self.fast_departure is not None else None
+        for mac, at in (saved or {}).items():
             try:
                 when = datetime.fromisoformat(at)
             except (TypeError, ValueError):
@@ -244,6 +246,11 @@ class PresenceTracker:
     def note_leave(self, access_point_id: str, at: datetime) -> None:
         """An access point reported that a client left it (for fast departure)."""
         self._leaves.setdefault(access_point_id, []).append(at)
+
+    def pending_departures(self, now: datetime) -> list[datetime]:
+        """Fast departure deadlines still ahead, earliest first: a program polls at each
+        (after a leave it books that itself; after restore() it books these)."""
+        return sorted(at for at in self._departs.values() if at > now)
 
     def current(self, mac: str | None, now: datetime) -> Sighting | None:
         """The MAC's sighting if it is home (within the grace period, and not away by
