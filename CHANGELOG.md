@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.14.0
+
+- **UniFi and TP-Link Omada log in to their controller themselves.** `unifi_network` and
+  `omada_network` no longer take a data source from the program (Home Assistant's UniFi
+  and Omada integrations, whose logged-in sessions a custom integration may not borrow);
+  their settings are now the controller's `host`, `port`, `username`, `password`, `site`
+  and `verify_ssl`, plus the AP's `ap_mac` as before. The types keep their names, so
+  saved settings only need the login added; without it a poll raises
+  `AccessPointAuthError` saying so. `UnifiSource`, `OmadaSource` and `SOURCE` are gone.
+- **New module `http_controller`:** one HTTPS session (aiohttp, a new dependency) per
+  controller and login, shared by its access points, kept between polls and logged in
+  again when the controller drops it; one read per 20 seconds serves them all.
+- **UniFi:** tells a UniFi OS console (`/api/auth/login`, `/proxy/network`, CSRF token)
+  from a self-hosted Network application (`/api/login`), the latter also while it is
+  still starting; finds the site by its short name or description; keeps one event
+  websocket per controller for all its access points' watches. Checked against a
+  self-hosted Network application 10.0.162.
+- **Omada:** the controller's v2 API (`/api/info`, login token, sites, devices, active
+  clients in pages); an account with every site (the owner) finds them in the site list,
+  as a 5.15 software controller answers. Checked against a software controller
+  5.15.24; still experimental (no access points yet).
+- **`AccessPointDriver.async_close()`** releases what a driver keeps open (programs call
+  it when they stop using one); **`LISTS_ACCESS_POINTS` / `async_list_access_points()`**
+  list a controller's access points to pick from.
+
 ## 0.13.1
 
 - **New driver `tplink_eap_snmp`, experimental:** TP-Link EAP access points running

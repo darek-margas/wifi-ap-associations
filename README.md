@@ -28,8 +28,8 @@ built on it, as a container for Node-RED and other MQTT users, is on the integra
 | `mikrotik_capsman_ssh` | MikroTik CAP via CAPsMAN: one CAP of a CAPsMAN controller (RouterOS 7, `wifi` package) | SSH exec on the controller: remote CAPs, interfaces and registration table, one read shared by its CAPs; one entry per CAP, by its identity | `dBm` |
 | `cisco_wlc_ssh` | Cisco lightweight APs (9120, 9130, ...) joined to a Catalyst 9800 controller | SSH console of the controller, `show wireless client summary`, plus up to 15 clients' detail per read in turns (signal, connected time); one entry per AP, by AP name | `dBm` |
 | `cisco_wlc_snmp` | The same APs, read over SNMP (v2c or v3) instead of SSH | SNMP: the Airespace client, client statistics and AP tables the 9800 serves, and Cisco's client table (connected time), every client every read; one entry per AP, by AP name | `dBm` |
-| `unifi_network` | UniFi | through a UniFi Network controller connection you pass in (see below) | `dBm` |
-| `omada_network` | TP-Link Omada access points (EAP), **experimental** | through an Omada controller connection you pass in (see below) | `dBm` |
+| `unifi_network` | UniFi | through its UniFi Network controller (UniFi OS or self-hosted), with a local account: `stat/sta` and `stat/device`, events over its websocket | `dBm` |
+| `omada_network` | TP-Link Omada access points (EAP), **experimental** | through its Omada controller (version 5 or later), with a local account: its v2 web API | `dBm` |
 | `tplink_eap_snmp` | TP-Link EAP running standalone (no controller), **experimental** | SNMP (v2c or v3): TP-Link's client table, MACs only (no SSID, band or signal) | — |
 
 More can be added as drivers; see
@@ -97,21 +97,16 @@ asyncio.run(main())
 - Errors: `AccessPointAuthError` for rejected credentials, `AccessPointError` for
   everything else (unreachable, timeout, unexpected output).
 
-### UniFi
+### UniFi and TP-Link Omada controllers
 
-The UniFi driver does not log in by itself. It reads from an object you pass as the
-second argument, which implements `UnifiSource`
-(`async_get_device(mac)` and `async_get_clients(mac)`, returning the controller's device
-and client records). In Home Assistant that is the UniFi Network integration's
-connection; elsewhere, wrap your own controller client.
-
-### TP-Link Omada
-
-The same for Omada (experimental): `OmadaSource` with `async_get_device(mac)` and
-`async_get_clients(mac)`, returning the controller's device records and its connected
-client records as [tplink-omada-client](https://pypi.org/project/tplink-omada-client/)
-gives them (`raw_data`). In Home Assistant that is the TP-Link Omada integration's
-connection.
+These drivers log in to the controller themselves (settings: `host`, `port`, `username`,
+`password`, `site`, `verify_ssl` and the AP's `ap_mac`). Access points with the same
+controller settings share one HTTPS session (aiohttp) and one read of the controller per
+20 seconds; call `await driver.async_close()` when you stop using a driver, and the
+session is closed with its last access point. `await UnifiNetworkDriver.async_list_access_points(settings)`
+(and the same for Omada) lists a controller's access points as `(mac, label)` for
+picking one. The UniFi driver keeps one event websocket per controller for its
+access points' watches.
 
 ## Command-line tools
 

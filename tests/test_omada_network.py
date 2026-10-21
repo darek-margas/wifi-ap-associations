@@ -10,7 +10,12 @@ import asyncio
 
 import pytest
 
-from wifi_ap_associations import DRIVERS, AccessPointError, AssociatedClient
+from wifi_ap_associations import (
+    DRIVERS,
+    AccessPointAuthError,
+    AccessPointError,
+    AssociatedClient,
+)
 from wifi_ap_associations.omada_network import (
     OmadaNetworkDriver,
     is_access_point,
@@ -46,26 +51,6 @@ CLIENTS = [
 ]
 
 
-class FakeSource:
-    def __init__(self, device=DEVICE, clients=CLIENTS) -> None:
-        self.device = device
-        self.clients = clients
-
-    async def async_get_device(self, mac):
-        return self.device if mac == AP else None
-
-    async def async_get_clients(self, mac):
-        return self.clients
-
-
-def test_registered_and_experimental() -> None:
-    assert DRIVERS["omada_network"] is OmadaNetworkDriver
-    assert OmadaNetworkDriver.EXPERIMENTAL is True
-    assert OmadaNetworkDriver.SOURCE == "omada"
-    assert OmadaNetworkDriver.OWN_DEVICE is False
-    assert "location" not in OmadaNetworkDriver.REPORTS
-
-
 def test_parse_clients_of_one_ap() -> None:
     assert parse_clients(CLIENTS, AP) == [
         AssociatedClient("2E:DC:E1:C4:37:D3", "ROAMING_SSID", "5GHz", -63, 2091),
@@ -89,21 +74,194 @@ def test_is_access_point() -> None:
     assert not is_access_point({**DEVICE, "type": "gateway"})
 
 
-def test_poll() -> None:
-    result = asyncio.run(OmadaNetworkDriver({"ap_mac": "c0-c9-e3-4b-af-0e"}, FakeSource()).async_poll())
+# --- the controller over HTTP: a fake Omada controller ---
+
+CID = "4c3e8bd0f8a0a1b2c3d4e5f6a7b8c9d0"
+
+
+class FakeOmada:
+    """An Omada controller (v5 API): /api/info, login token, sites, devices, clients in
+    pages, errorCode in every answer."""
+
+    def __init__(self, password: str = "pw", page_size_cap: int | None = None, owner: bool = False) -> None:
+        self.password = password
+        self.owner = owner  # all sites: privilege.sites is empty, /sites lists them
+        self.page_size_cap = page_size_cap
+        self.logins = 0
+        self.expire_once = False
+        self.client_pages: list[int] = []
+
+    def app(self):
+        from aiohttp import web
+
+        routes = web.RouteTableDef()
+
+        def ok(result):
+            return web.json_response({"errorCode": 0, "msg": "Success.", "result": result})
+
+        @routes.get("/api/info")
+        async def info(request):
+            return ok({"omadacId": CID, "controllerVer": "5.15.8", "apiVer": "3"})
+
+        @routes.post(f"/{CID}/api/v2/login")
+        async def login(request):
+            body = await request.json()
+            if body.get("username") != "ro" or body.get("password") != self.password:
+                return web.json_response({"errorCode": -30109, "msg": "Invalid username or password."})
+            self.logins += 1
+            response = ok({"roleType": 1, "token": f"tok{self.logins}"})
+            response.set_cookie("TPOMADA_SESSIONID", "sess")
+            return response
+
+        def guarded(handler):
+            async def wrapped(request):
+                if self.expire_once:
+                    self.expire_once = False
+                    return web.json_response({"errorCode": -1200, "msg": "Login required."})
+                if request.headers.get("Csrf-Token") != f"tok{self.logins}":
+                    return web.json_response({"errorCode": -1200, "msg": "Login required."})
+                return ok(handler(request))
+            return wrapped
+
+        routes.get(f"/{CID}/api/v2/users/current")(guarded(lambda r: {
+            "name": "ro", "privilege": {"sites": [], "all": True} if self.owner else {
+                "sites": [{"name": "Default", "key": "site1"}, {"name": "Cabin", "key": "site2"}]}}))
+        routes.get(f"/{CID}/api/v2/sites")(guarded(lambda r: {
+            "totalRows": 2, "currentPage": 1, "currentSize": 2,
+            "data": [{"id": "site1", "name": "Default"}, {"id": "site2", "name": "Cabin"}]}))
+        routes.get(f"/{CID}/api/v2/sites/{{site}}/devices")(guarded(lambda r: [
+            DEVICE, {"mac": "C0-C9-E3-00-00-99", "type": "switch", "name": "Core"}]
+            if r.match_info["site"] == "site1" else []))
+
+        def clients(request):
+            assert request.query["filters.active"] == "true"
+            page = int(request.query["currentPage"])
+            size = min(int(request.query["currentPageSize"]), self.page_size_cap or 10**6)
+            self.client_pages.append(page)
+            rows = CLIENTS[(page - 1) * size: page * size]
+            return {"totalRows": len(CLIENTS), "currentPage": page, "currentSize": size, "data": rows}
+
+        routes.get(f"/{CID}/api/v2/sites/{{site}}/clients")(guarded(clients))
+        app = web.Application()
+        app.add_routes(routes)
+        return app
+
+
+def run_with(fake: FakeOmada, monkeypatch, work):
+    from aiohttp.test_utils import TestServer
+
+    from wifi_ap_associations import http_controller
+
+    monkeypatch.setattr(http_controller, "SCHEME", "http")
+
+    async def main():
+        server = TestServer(fake.app())
+        await server.start_server()
+        try:
+            settings = {"host": "127.0.0.1", "port": server.port, "username": "ro", "password": "pw",
+                        "site": "Default", "ap_mac": AP}
+            return await work(settings)
+        finally:
+            await server.close()
+
+    return asyncio.run(main())
+
+
+def poll(settings_changes=None):
+    async def work(settings):
+        driver = OmadaNetworkDriver({**settings, **(settings_changes or {})})
+        try:
+            return await driver.async_poll()
+        finally:
+            await driver.async_close()
+    return work
+
+
+def test_registered_and_experimental() -> None:
+    assert DRIVERS["omada_network"] is OmadaNetworkDriver
+    assert OmadaNetworkDriver.EXPERIMENTAL is True
+    assert OmadaNetworkDriver.SOURCE is None and OmadaNetworkDriver.OWN_DEVICE
+    assert OmadaNetworkDriver.LISTS_ACCESS_POINTS
+    assert "location" not in OmadaNetworkDriver.REPORTS
+    keys = [f.key for f in OmadaNetworkDriver.FIELDS]
+    assert keys == ["host", "port", "username", "password", "site", "verify_ssl", "ap_mac"]
+
+
+def test_poll_through_the_controller(monkeypatch) -> None:
+    fake = FakeOmada(page_size_cap=3)  # the clients come in three pages
+    result = run_with(fake, monkeypatch, poll())
     assert [c.mac for c in result.clients] == ["2E:DC:E1:C4:37:D3", "AA:BB:CC:00:00:03"]
+    assert result.info.model == "EAP653"
+    assert fake.client_pages == [1, 2, 3] and fake.logins == 1
+
+
+def test_site_by_name_case_insensitive(monkeypatch) -> None:
+    result = run_with(FakeOmada(), monkeypatch, poll({"site": "default"}))
     assert result.info.name == "Spare Room"
 
 
-@pytest.mark.parametrize(
-    ("source", "message"),
-    [
-        (None, "inside Home Assistant"),
-        (FakeSource(device=None), "not an access point"),
-        (FakeSource(device={**DEVICE, "statusCategory": 0}), "disconnected"),
-        (FakeSource(device={**DEVICE, "statusCategory": 3}), "heartbeat missed"),
-    ],
-)
-def test_poll_unavailable(source, message) -> None:
-    with pytest.raises(AccessPointError, match=message):
-        asyncio.run(OmadaNetworkDriver({"ap_mac": AP}, source).async_poll())
+def test_unknown_site_lists_the_sites(monkeypatch) -> None:
+    with pytest.raises(AccessPointError, match="no site 'Office'.*Default, Cabin"):
+        run_with(FakeOmada(), monkeypatch, poll({"site": "Office"}))
+
+
+def test_wrong_password_is_an_auth_error(monkeypatch) -> None:
+    with pytest.raises(AccessPointAuthError, match="rejected the user or password"):
+        run_with(FakeOmada(), monkeypatch, poll({"password": "nope"}))
+
+
+def test_an_expired_session_logs_in_again(monkeypatch) -> None:
+    from wifi_ap_associations import http_controller
+
+    monkeypatch.setattr(http_controller, "SHARE_SECONDS", 0)
+    fake = FakeOmada()
+
+    async def work(settings):
+        driver = OmadaNetworkDriver(settings)
+        try:
+            await driver.async_poll()
+            fake.expire_once = True
+            return await driver.async_poll()
+        finally:
+            await driver.async_close()
+
+    result = run_with(fake, monkeypatch, work)
+    assert len(result.clients) == 2 and fake.logins == 2
+
+
+def test_not_an_omada_controller(monkeypatch) -> None:
+    from aiohttp import web
+
+    class NotOmada(FakeOmada):
+        def app(self):
+            return web.Application()
+
+    with pytest.raises(AccessPointError, match="doesn't answer as an Omada controller"):
+        run_with(NotOmada(), monkeypatch, poll())
+
+
+def test_disconnected_ap(monkeypatch) -> None:
+    fake = FakeOmada()
+    original = DEVICE["statusCategory"]
+    DEVICE["statusCategory"] = 0
+    try:
+        with pytest.raises(AccessPointError, match="as disconnected"):
+            run_with(fake, monkeypatch, poll())
+    finally:
+        DEVICE["statusCategory"] = original
+
+
+def test_settings_from_before_0_12_ask_for_the_login() -> None:
+    with pytest.raises(AccessPointAuthError, match="Reconfigure"):
+        asyncio.run(OmadaNetworkDriver({"ap_mac": AP}).async_poll())
+
+
+def test_list_access_points(monkeypatch) -> None:
+    found = run_with(FakeOmada(), monkeypatch, OmadaNetworkDriver.async_list_access_points)
+    assert found == [(AP, "Spare Room (EAP653, C0:C9:E3:4B:AF:0E)")]
+
+
+def test_an_owner_account_finds_its_sites_in_the_site_list(monkeypatch) -> None:
+    # Seen on a 5.15 software controller: the owner's privilege.sites is empty, "all" true.
+    result = run_with(FakeOmada(owner=True), monkeypatch, poll())
+    assert result.info.name == "Spare Room"

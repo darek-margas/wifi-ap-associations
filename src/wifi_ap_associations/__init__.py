@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.13.1"
+__version__ = "0.14.0"
 
 
 class AccessPointError(Exception):
@@ -174,6 +174,20 @@ class AccessPointDriver(ABC):
     def device_mac(self) -> str | None:
         """The AP's MAC, for finding the device another integration registered for it."""
         return None
+
+    LISTS_ACCESS_POINTS: ClassVar[bool] = False
+    """Whether async_list_access_points() can list the APs to pick UNIQUE_FIELD from,
+    given the other settings (e.g. a controller's address and login)."""
+
+    @classmethod
+    async def async_list_access_points(cls, config: dict[str, Any]) -> list[tuple[str, str]]:
+        """(UNIQUE_FIELD value, label) of each AP these settings reach. Raises
+        AccessPointAuthError or AccessPointError as a poll would."""
+        raise NotImplementedError(f"{cls.TYPE} can't list access points")
+
+    async def async_close(self) -> None:
+        """Release what the driver keeps open between polls (e.g. a controller session).
+        Programs call it when they stop using the driver; most drivers keep nothing."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         """Store the settings (keys as declared in FIELDS)."""
