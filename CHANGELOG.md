@@ -2,6 +2,10 @@
 
 ## 0.14.0
 
+**Breaking change:** `unifi_network` and `omada_network` need the controller's login in
+their settings, and no longer take a data source as the constructor's second argument;
+`UnifiSource`, `OmadaSource` and `AccessPointDriver.SOURCE` are removed.
+
 - **UniFi and TP-Link Omada log in to their controller themselves.** `unifi_network` and
   `omada_network` no longer take a data source from the program (Home Assistant's UniFi
   and Omada integrations, whose logged-in sessions a custom integration may not borrow);
