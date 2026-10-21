@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.1
+
+- **UniFi instant arrivals poll the controller anew.** An arrival event now invalidates
+  the controller read shared by its access points (for 20 seconds), so the poll it asks
+  for sees the client that just joined instead of the list from before; a read already
+  under way when the event came isn't reused either. 0.14.0 lost this when the driver
+  stopped reading through Home Assistant's UniFi integration (which cleared its list on
+  an arrival), so a join waited up to 20 seconds more. Found in review.
+- Omada: a session that ends between pages of the client list logs in again and the
+  list stays complete (tested).
+
 ## 0.14.0
 
 **Breaking change:** `unifi_network` and `omada_network` need the controller's login in

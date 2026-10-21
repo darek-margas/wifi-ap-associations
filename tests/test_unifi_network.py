@@ -391,3 +391,59 @@ def test_a_starting_controller_is_not_taken_for_unifi_os(monkeypatch) -> None:
 
     # Seen on the Network application 10.0: "/" answers 200 with JSON while it starts.
     assert len(run_with(FakeUnifi(starting=True), monkeypatch, work).clients) == 2
+
+
+def test_an_arrival_event_makes_the_next_poll_read_anew(monkeypatch) -> None:
+    """Review of 0.14.0: the poll an arrival asks for must not reuse the shared read
+    from before the client joined."""
+    fake = FakeUnifi(events=[
+        {"key": "EVT_WU_Disconnected", "user": PHONE, "ap": "78:8a:20:00:00:10"},  # no new read
+        {"key": "EVT_WU_Connected", "user": PHONE, "ap": "78:8a:20:00:00:10"},
+    ])
+
+    async def work(settings):
+        driver = UnifiNetworkDriver(settings)
+        try:
+            await driver.async_poll()
+            changes: list[int] = []
+            with pytest.raises(AccessPointError):  # the fake closes the stream after its events
+                await driver.async_watch(lambda: changes.append(1))
+            assert changes == [1]
+            await driver.async_poll()  # within SHARE_SECONDS, but after the arrival
+            await driver.async_poll()  # nothing new since: the shared read again
+        finally:
+            await driver.async_close()
+
+    run_with(fake, monkeypatch, work)
+    assert fake.requests.count("/api/s/default/stat/sta") == 2
+
+
+def test_a_read_under_way_when_a_change_comes_is_not_reused() -> None:
+    from wifi_ap_associations.http_controller import HttpController
+
+    class Slow(HttpController):
+        def __init__(self) -> None:
+            super().__init__({"host": "x"})
+            self.fetches = 0
+            self.gate = asyncio.Event()
+
+        async def login(self) -> None:
+            pass
+
+        async def fetch(self):
+            self.fetches += 1
+            if self.fetches == 1:
+                await self.gate.wait()
+            return self.fetches
+
+    async def main():
+        c = Slow()
+        first = asyncio.create_task(c.read())
+        await asyncio.sleep(0)
+        c.invalidate()  # the change comes while the first read is out
+        second = asyncio.create_task(c.read())
+        await asyncio.sleep(0)
+        c.gate.set()
+        return await first, await second, await c.read()
+
+    assert asyncio.run(main()) == (1, 2, 2)

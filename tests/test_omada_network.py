@@ -86,6 +86,7 @@ class FakeOmada:
     def __init__(self, password: str = "pw", page_size_cap: int | None = None, owner: bool = False) -> None:
         self.password = password
         self.owner = owner  # all sites: privilege.sites is empty, /sites lists them
+        self.expire_after_page: int | None = None  # the session ends after this client page
         self.page_size_cap = page_size_cap
         self.logins = 0
         self.expire_once = False
@@ -138,6 +139,9 @@ class FakeOmada:
             page = int(request.query["currentPage"])
             size = min(int(request.query["currentPageSize"]), self.page_size_cap or 10**6)
             self.client_pages.append(page)
+            if self.expire_after_page == page:
+                self.expire_after_page = None
+                self.expire_once = True  # the next request finds the session gone
             rows = CLIENTS[(page - 1) * size: page * size]
             return {"totalRows": len(CLIENTS), "currentPage": page, "currentSize": size, "data": rows}
 
@@ -265,3 +269,11 @@ def test_an_owner_account_finds_its_sites_in_the_site_list(monkeypatch) -> None:
     # Seen on a 5.15 software controller: the owner's privilege.sites is empty, "all" true.
     result = run_with(FakeOmada(owner=True), monkeypatch, poll())
     assert result.info.name == "Spare Room"
+
+
+def test_a_session_ending_between_client_pages_still_gives_every_client(monkeypatch) -> None:
+    fake = FakeOmada(page_size_cap=3)
+    fake.expire_after_page = 1
+    result = run_with(fake, monkeypatch, poll())
+    assert [c.mac for c in result.clients] == ["2E:DC:E1:C4:37:D3", "AA:BB:CC:00:00:03"]
+    assert fake.client_pages == [1, 2, 3] and fake.logins == 2

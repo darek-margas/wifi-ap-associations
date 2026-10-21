@@ -331,6 +331,10 @@ class UnifiController(HttpController[UnifiData]):
                     if (body.get("meta") or {}).get("message") != "events":
                         continue
                     for event in body.get("data") or []:
+                        if event.get("key") in ARRIVAL_EVENTS:
+                            # The poll this asks for must see the client: not a read from
+                            # before it joined (shared for SHARE_SECONDS otherwise).
+                            self.invalidate()
                         for watcher in list(self._watchers):
                             watcher(event)
         except aiohttp.WSServerHandshakeError as err:

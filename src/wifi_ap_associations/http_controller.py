@@ -46,6 +46,9 @@ class HttpController[T]:
         self._read_lock = asyncio.Lock()
         self._read_at = 0.0
         self._read: T | None = None
+        # Bumped by invalidate(); a read counts only if it started after the last bump.
+        self._generation = 0
+        self._read_generation = -1
 
     @property
     def base_url(self) -> str:
@@ -130,14 +133,26 @@ class HttpController[T]:
         """Everything a read needs (logged in)."""
         raise NotImplementedError
 
+    def invalidate(self) -> None:
+        """The controller reported a change (e.g. a client joined): the next read asks it
+        anew, also if a read was already under way when the change came."""
+        self._generation += 1
+
     async def read(self) -> T:
-        """The controller's data, shared by the APs polled within SHARE_SECONDS."""
+        """The controller's data, shared by the APs polled within SHARE_SECONDS (and
+        not invalidated since that read began)."""
         async with self._read_lock:
-            if self._read is not None and time.monotonic() - self._read_at < SHARE_SECONDS:
+            if (
+                self._read is not None
+                and self._read_generation == self._generation
+                and time.monotonic() - self._read_at < SHARE_SECONDS
+            ):
                 return self._read
+            generation = self._generation
             await self.ensure_login()
             self._read = await self.fetch()
             self._read_at = time.monotonic()
+            self._read_generation = generation
             return self._read
 
 
