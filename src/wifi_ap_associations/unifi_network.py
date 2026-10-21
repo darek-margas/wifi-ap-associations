@@ -331,9 +331,10 @@ class UnifiController(HttpController[UnifiData]):
                     if (body.get("meta") or {}).get("message") != "events":
                         continue
                     for event in body.get("data") or []:
-                        if event.get("key") in ARRIVAL_EVENTS:
-                            # The poll this asks for must see the client: not a read from
-                            # before it joined (shared for SHARE_SECONDS otherwise).
+                        if event.get("key") in ARRIVAL_EVENTS | LEAVE_EVENTS:
+                            # The poll this asks for (or a fast departure's deadline poll)
+                            # must see the change: not a read from before it (shared for
+                            # SHARE_SECONDS otherwise).
                             self.invalidate()
                         for watcher in list(self._watchers):
                             watcher(event)
@@ -371,6 +372,7 @@ class UnifiNetworkDriver(AccessPointDriver):
     )
     SIGNAL_UNIT = "dBm"
     UNIQUE_FIELD = CONF_AP_MAC
+    MAC_FIELDS = (CONF_AP_MAC,)
     LISTS_ACCESS_POINTS = True
     # Login and two requests to a local controller.
     POLL_TIMEOUT = 30

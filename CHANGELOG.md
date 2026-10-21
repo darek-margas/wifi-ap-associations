@@ -8,6 +8,12 @@
   under way when the event came isn't reused either. 0.14.0 lost this when the driver
   stopped reading through Home Assistant's UniFi integration (which cleared its list on
   an arrival), so a join waited up to 20 seconds more. Found in review.
+- **Leaves too:** a UniFi disconnect event invalidates the shared read as well, so fast
+  departure's deadline poll sees the client gone instead of the list from before the
+  disconnect (which kept the device home and its visit open).
+- **One AP, however its MAC is written:** `AccessPointDriver.MAC_FIELDS` lists settings
+  holding a MAC, and `identity()` compares them normalized; the UniFi and Omada drivers
+  declare `ap_mac`. `78-8a-20-00-00-10` and `78:8A:20:00:00:10` were two APs before.
 - Omada: a session that ends between pages of the client list logs in again and the
   list stays complete (tested).
 

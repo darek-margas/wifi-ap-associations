@@ -137,10 +137,14 @@ class AccessPointDriver(ABC):
         its clients twice.
         """
         values = tuple(
-            str(config.get(key) or "").strip().casefold()
+            _identity_value(config.get(key), key in cls.MAC_FIELDS)
             for key in cls.IDENTITY_FIELDS or (cls.UNIQUE_FIELD,)
         )
         return values if all(values) else None
+
+    MAC_FIELDS: ClassVar[tuple[str, ...]] = ()
+    """Settings holding a MAC address: identity() compares them normalized, so
+    78-8a-20-00-00-10 and 78:8A:20:00:00:10 are the same AP."""
 
     WATCHES: ClassVar[bool] = False
     """Whether async_watch() can tell, as it happens, that the clients may have changed
@@ -217,6 +221,16 @@ def register(cls: type[AccessPointDriver]) -> type[AccessPointDriver]:
     """Class decorator registering a driver under its TYPE."""
     DRIVERS[cls.TYPE] = cls
     return cls
+
+
+def _identity_value(value: Any, is_mac: bool) -> str:
+    text = str(value or "").strip()
+    if is_mac:
+        try:
+            return normalize_mac(text)
+        except ValueError:
+            pass
+    return text.casefold()
 
 
 def normalize_mac(mac: str) -> str:

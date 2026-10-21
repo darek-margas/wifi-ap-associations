@@ -256,6 +256,7 @@ class OmadaNetworkDriver(AccessPointDriver):
     )
     SIGNAL_UNIT = "dBm"
     UNIQUE_FIELD = CONF_AP_MAC
+    MAC_FIELDS = (CONF_AP_MAC,)
     LISTS_ACCESS_POINTS = True
     POLL_TIMEOUT = 30
     EXPERIMENTAL = True

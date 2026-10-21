@@ -447,3 +447,35 @@ def test_a_read_under_way_when_a_change_comes_is_not_reused() -> None:
         return await first, await second, await c.read()
 
     assert asyncio.run(main()) == (1, 2, 2)
+
+
+def test_a_leave_event_makes_the_next_poll_read_anew(monkeypatch) -> None:
+    """Local review: the deadline poll of fast departure must not see the client list
+    from before the disconnect (it would show the device home and keep its visit)."""
+    fake = FakeUnifi(events=[{"key": "EVT_WU_Disconnected", "user": PHONE, "ap": "78:8a:20:00:00:10"}])
+
+    async def work(settings):
+        driver = UnifiNetworkDriver(settings)
+        try:
+            await driver.async_poll()
+            leaves: list[int] = []
+            with pytest.raises(AccessPointError):
+                await driver.async_watch(lambda: None, on_leave=lambda: leaves.append(1))
+            assert leaves == [1]
+            await driver.async_poll()
+        finally:
+            await driver.async_close()
+
+    run_with(fake, monkeypatch, work)
+    assert fake.requests.count("/api/s/default/stat/sta") == 2
+
+
+def test_the_same_ap_with_its_mac_spelled_differently_is_one_identity() -> None:
+    from wifi_ap_associations.omada_network import OmadaNetworkDriver
+
+    colons = UnifiNetworkDriver.identity({"ap_mac": "78:8A:20:00:00:10"})
+    assert colons == UnifiNetworkDriver.identity({"ap_mac": "78-8a-20-00-00-10"})
+    assert colons == UnifiNetworkDriver.identity({"ap_mac": " 788a.2000.0010 "})
+    # The same MAC under the other controller type is the same physical AP too.
+    assert colons == OmadaNetworkDriver.identity({"ap_mac": "78-8A-20-00-00-10"})
+    assert UnifiNetworkDriver.identity({"ap_mac": ""}) is None
