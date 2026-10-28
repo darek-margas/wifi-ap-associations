@@ -1,8 +1,9 @@
 """TP-Link EAP access points running standalone (no Omada controller), over SNMP.
 
-EXPERIMENTAL: built from two reports of an EAP670 (firmware 1.3.13), not yet polled by
-a real installation. Its command line has no way to list clients, but TP-Link's own part
-of the MIB does (sysObjectID 1.3.6.1.4.1.11863.10.1):
+Built from two reports of an EAP670 (firmware 1.3.13) and confirmed by its owner in Home
+Assistant: presence and the right AP, client counts matching the EAP's web UI. Its command
+line has no way to list clients, but TP-Link's own part of the MIB does (sysObjectID
+1.3.6.1.4.1.11863.10.1):
 
     1.3.6.1.4.1.11863.10.1.1.1.0       the number of connected clients
     1.3.6.1.4.1.11863.10.1.1.2.1       one row per client, indexed 1, 2, ...:
@@ -115,7 +116,6 @@ class TplinkEapSnmp(SnmpCredentials, AccessPointDriver):
     SIGNAL_UNIT = "dBm"  # the table has no signal; declared for the interface only
     REPORTS = frozenset({"name", "model"})
     CLIENT_DETAILS = frozenset()  # MACs only
-    EXPERIMENTAL = True
     BLOCKING_IMPORTS = ("pysnmp.hlapi.v3arch.asyncio",)
     FIELDS = (
         DriverField("host"),

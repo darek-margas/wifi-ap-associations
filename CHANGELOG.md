@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.2
+
+- **`tplink_eap_snmp` is no longer experimental:** confirmed on an EAP670 (firmware
+  1.3.13) in Home Assistant, presence and the right access point, with client counts
+  matching the EAP's own list.
+
 ## 0.14.1
 
 - **UniFi instant arrivals poll the controller anew.** An arrival event now invalidates

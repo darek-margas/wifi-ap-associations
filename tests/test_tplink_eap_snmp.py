@@ -40,9 +40,9 @@ EAP670 = {
 CONFIG = {"host": "192.0.2.48", "port": 161, "community": "public-ro"}
 
 
-def test_registered_as_experimental_snmp_driver() -> None:
+def test_registered_snmp_driver() -> None:
     assert DRIVERS["tplink_eap_snmp"] is TplinkEapSnmp
-    assert TplinkEapSnmp.EXPERIMENTAL is True
+    assert TplinkEapSnmp.EXPERIMENTAL is False  # confirmed on an EAP670 (discussion #4)
     assert TplinkEapSnmp.UNIQUE_FIELD == "host"
     assert TplinkEapSnmp.REPORTS == {"name", "model"}
     assert TplinkEapSnmp.CLIENT_DETAILS == frozenset()  # MACs only
