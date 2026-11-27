@@ -59,8 +59,10 @@ def test_drivers() -> None:
 class FakeDap:
     """The DAP's web interface, as far as the restart needs it."""
 
-    def __init__(self, password: str = PASSWORD) -> None:
+    def __init__(self, password: str = PASSWORD, goes_down: bool = True) -> None:
         self.private_key, self.expected = w.login_password(SALT_DATA, SALT_KEY, password)
+        self.goes_down = goes_down
+        self.site: web.TCPSite | None = None
         self.counter = 1795745587
         self.log: list[str] = []
         self.restarted = False
@@ -88,6 +90,10 @@ class FakeDap:
                 assert request.rel_url.raw_query_string == "&exeshell=submit%20REBOOT"
                 self.restarted = True
                 body = "rebooting"
+                if self.goes_down:  # stop listening shortly after answering
+                    asyncio.get_running_loop().call_later(
+                        0.05, lambda: asyncio.ensure_future(self.site.stop())
+                    )
             else:
                 body = "page"
             resp = web.Response(text=body)
@@ -102,7 +108,7 @@ class FakeDap:
 async def _serve(fake: FakeDap):
     runner = web.AppRunner(fake.app())
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
+    site = fake.site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     port = site._server.sockets[0].getsockname()[1]
     return runner, port
@@ -147,3 +153,21 @@ def test_wrong_password_never_reaches_reboot() -> None:
 def test_unreachable_is_an_access_point_error() -> None:
     with pytest.raises(AccessPointError):
         asyncio.run(w.async_restart("127.0.0.1", "admin", PASSWORD, port=9))
+
+
+def test_still_answering_after_the_command_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A page came back but the AP never went down (e.g. a session rejected without
+    # "login_fail"): not a restart.
+    monkeypatch.setattr(w, "DOWN_WAIT", 1)
+
+    async def go() -> FakeDap:
+        fake = FakeDap(goes_down=False)
+        runner, port = await _serve(fake)
+        try:
+            with pytest.raises(AccessPointError, match="still answers"):
+                await w.async_restart("127.0.0.1", "admin", PASSWORD, port=port)
+        finally:
+            await runner.cleanup()
+        return fake
+
+    assert asyncio.run(go()).restarted

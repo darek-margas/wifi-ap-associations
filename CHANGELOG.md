@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.2
+
+From a review of the restart code:
+
+- **D-Link:** a restart counts only once the AP's web interface stops answering (up to
+  20 seconds after the command). Before, any reply without `login_fail` counted, so a
+  session rejected another way would have looked like a restart.
+- **OpenWrt:** a `reboot` that neither returns nor loses the session within the timeout
+  is an error now. Only a lost session counts as rebooting.
+
 ## 0.15.1
 
 - **OpenWrt restarts too:** `reboot` over SSH. The session usually drops before the

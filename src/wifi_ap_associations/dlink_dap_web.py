@@ -19,6 +19,8 @@ module sends the same requests a browser does:
    characters as ASCII bytes.
 3. GET /sys_cfg_valid.xgi?&exeshell=submit REBOOT. The factory reset next to it on
    the same page is a different command; only this exact string is ever sent.
+4. The reply's text says nothing reliable (a rejected session gets a page too), so
+   the restart counts only once the web interface stops answering.
 
 Seen on a DAP-2610 with firmware v2.06; other DAPs with the same web interface
 (e.g. the DAP-3662) should behave the same.
@@ -26,6 +28,7 @@ Seen on a DAP-2610 with firmware v2.06; other DAPs with the same web interface
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -41,6 +44,10 @@ from . import AccessPointAuthError, AccessPointError
 # Exactly what the page's do_reboot() opens: exe_str("submit REBOOT").
 RESTART_PATH = "/sys_cfg_valid.xgi?&exeshell=submit%20REBOOT"
 RESTART_TIMEOUT = 30
+# After the command: how long the web interface may keep answering before the
+# restart counts as not taken (a DAP-2610 was off the network within seconds).
+DOWN_WAIT = 20
+DOWN_PROBE_TIMEOUT = 2
 
 _SALTS = re.compile(r'private_key\s*=\s*hex_hmac_md5\("([^"]*)","([^"]*)"\+f\.LOGIN_PASSWD')
 _USER_AGENT = "Mozilla/5.0 (wifi-ap-associations)"
@@ -174,6 +181,23 @@ class _Browser:
             return body
 
 
+async def _goes_down(host: str, port: int) -> bool:
+    """Whether the web interface stops accepting connections within DOWN_WAIT."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + DOWN_WAIT
+    while True:
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), DOWN_PROBE_TIMEOUT
+            )
+        except (OSError, asyncio.TimeoutError, TimeoutError):
+            return True
+        writer.close()
+        if loop.time() >= deadline:
+            return False
+        await asyncio.sleep(1)
+
+
 async def async_restart(host: str, username: str, password: str, port: int = 80) -> None:
     """Log in to the web interface and press its Restart. Returns once the AP took
     the command. Raises AccessPointAuthError for a rejected login, AccessPointError
@@ -210,6 +234,10 @@ async def async_restart(host: str, username: str, password: str, port: int = 80)
                 return  # dropped the connection on its way down
             if "login_fail" in body:
                 raise AccessPointError("web session rejected the restart")
+        if not await _goes_down(host, port):
+            raise AccessPointError(
+                f"{host}: took the restart command but still answers after {DOWN_WAIT} s"
+            )
     except AccessPointError:
         raise
     except (aiohttp.ClientError, TimeoutError) as err:
