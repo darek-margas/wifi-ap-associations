@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.15.0
+
+- **Restarting an access point:** `AccessPointDriver.RESTARTS` and `async_restart()`
+  (in Home Assistant, a Restart button on its device). Off for every driver except:
+- **D-Link DAP** restarts through its web interface (`dlink_dap_web`), with the same
+  login as the console. Neither of the other ways works on a DAP-2610 (firmware v2.06):
+  the SSH CLI's `reboot` prints `sh: can't open '/dev/null': Permission denied` and the
+  AP stays up, and SNMP's `deviceRestart` takes the value and ignores it. The web module
+  logs in as the page does (two per-session salts, HMAC-MD5), renews the `auth_key`
+  replay counter the page keeps (a one-round cipher on a 64-byte cookie), and sends only
+  `submit REBOOT`. Login and the counter were checked against a real DAP-2610; the
+  reboot itself is left to the first test in Home Assistant.
+
 ## 0.14.2
 
 - **`tplink_eap_snmp` is no longer experimental:** confirmed on an EAP670 (firmware

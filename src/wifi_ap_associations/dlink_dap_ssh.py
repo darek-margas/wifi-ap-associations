@@ -325,6 +325,16 @@ class DlinkDapSsh(AccessPointDriver):
             ]
         return clients
 
+    # Restart goes through the web interface: the CLI's "reboot" fails on firmware
+    # v2.06 (see dlink_dap_web). Same login as the console.
+    RESTARTS = True
+
+    async def async_restart(self) -> None:
+        """Reboot through the web interface's Restart (HTTP, port 80)."""
+        from .dlink_dap_web import async_restart
+
+        await async_restart(self.config["host"], self.config["username"], self.config["password"])
+
     async def async_run_commands(self, commands: list[str]) -> list[str]:
         """Run read-only console commands and return their raw output (for diagnostics)."""
         async with self._console() as process:

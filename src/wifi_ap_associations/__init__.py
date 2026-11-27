@@ -17,7 +17,7 @@ from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-__version__ = "0.14.2"
+__version__ = "0.15.0"
 
 
 class AccessPointError(Exception):
@@ -188,6 +188,15 @@ class AccessPointDriver(ABC):
         """(UNIQUE_FIELD value, label) of each AP these settings reach. Raises
         AccessPointAuthError or AccessPointError as a poll would."""
         raise NotImplementedError(f"{cls.TYPE} can't list access points")
+
+    RESTARTS: ClassVar[bool] = False
+    """Whether async_restart() can reboot the access point (in Home Assistant, a Restart
+    button on its device)."""
+
+    async def async_restart(self) -> None:
+        """Reboot the access point. Returns once it took the command; it is then gone
+        for a minute or two. Raises AccessPointAuthError or AccessPointError."""
+        raise NotImplementedError(f"{self.TYPE} can't restart the access point")
 
     async def async_close(self) -> None:
         """Release what the driver keeps open between polls (e.g. a controller session).
