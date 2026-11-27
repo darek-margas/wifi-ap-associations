@@ -502,6 +502,36 @@ class OpenWrtSsh(AccessPointDriver):
         except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
             raise AccessPointError(f"{host}: {err!r}") from err
 
+    RESTARTS = True
+
+    async def async_restart(self) -> None:
+        """Run "reboot" over SSH. The AP may drop the session before the command
+        returns; once it was sent, that counts as taken."""
+        host = self.config["host"]
+        sent = False
+        try:
+            async with asyncssh.connect(
+                host,
+                port=int(self.config.get("port") or 22),
+                username=self.config["username"],
+                password=self.config["password"],
+                **self.SSH_POLICY.connect_options(),
+            ) as conn:
+                sent = True
+                result = await asyncio.wait_for(
+                    conn.run("reboot", check=False, encoding="utf-8", errors="replace"),
+                    COMMAND_TIMEOUT,
+                )
+        except asyncssh.PermissionDenied as err:
+            raise AccessPointAuthError(f"{host}: login rejected") from err
+        except (OSError, asyncio.TimeoutError, asyncssh.Error) as err:
+            if sent:
+                return  # went down while answering: rebooting
+            raise AccessPointError(f"{host}: {err!r}") from err
+        if result.exit_status not in (0, None):
+            output = f"{result.stdout or ''} {result.stderr or ''}".strip()
+            raise AccessPointError(f"{host}: reboot failed ({result.exit_status}): {output[:200]}")
+
     async def _run(self, command: str) -> str:
         try:
             async with asyncssh.connect(

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.1
+
+- **OpenWrt restarts too:** `reboot` over SSH. The session usually drops before the
+  command returns; once it was sent, that counts as taken. Checked on OpenWrt 25.12.5
+  and 22.03.7 (uptime back to seconds both times).
+- **D-Link through the web interface, confirmed:** the first restart in Home Assistant
+  rebooted a DAP-2610 (firmware v2.06).
+
 ## 0.15.0
 
 - **Restarting an access point:** `AccessPointDriver.RESTARTS` and `async_restart()`

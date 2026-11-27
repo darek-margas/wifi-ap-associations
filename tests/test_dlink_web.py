@@ -52,7 +52,8 @@ def test_cookie_under_another_key_has_no_counter() -> None:
 
 def test_drivers() -> None:
     assert DRIVERS["dlink_dap_ssh"].RESTARTS is True
-    assert DRIVERS["openwrt_ssh"].RESTARTS is False
+    assert DRIVERS["openwrt_ssh"].RESTARTS is True
+    assert DRIVERS["cisco_wlc_ssh"].RESTARTS is False
 
 
 class FakeDap:
